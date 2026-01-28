@@ -19,15 +19,17 @@ limitations under the License.
 
 #include "device_allocator.h"
 
+#include <cuda_runtime.h>
+
 namespace sgm
 {
 
     enum ImageType
     {
-        SGM_8U,
-        SGM_16U,
-        SGM_32U,
-        SGM_64U,
+        SGM_8U,  //! unsigned 8-bit integer representing input image in 8-bit grayscale format
+        SGM_16U, //! unsigned 16-bit integer representing input image in 16-bit grayscale or cost/disparity format
+        SGM_32U, //! unsigned 32-bit integer representing intermediate data (cost aggregation) or symmetric census output.
+        SGM_64U, //! unsigned 64-bit integer representing standard census output.
     };
 
     class DeviceImage
@@ -40,9 +42,9 @@ namespace sgm
         void create(int rows, int cols, ImageType type, int step = -1);
         void create(void *data, int rows, int cols, ImageType type, int step = -1);
 
-        void upload(const void *data);
-        void download(void *data) const;
-        void fill_zero();
+        void upload(const void *data, cudaStream_t stream = 0);
+        void download(void *data, cudaStream_t stream = 0) const;
+        void fill_zero(cudaStream_t stream = 0);
 
         template<typename T>
         T *ptr(int y = 0)

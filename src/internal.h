@@ -20,12 +20,14 @@ limitations under the License.
 #include "device_image.h"
 #include "libsgm.h"
 
+#include <cuda_runtime.h>
+
 namespace sgm
 {
     namespace details
     {
 
-        void census_transform(const DeviceImage &src, DeviceImage &dst, CensusType type);
+        void census_transform(const DeviceImage &src, DeviceImage &dst, CensusType type, cudaStream_t stream = 0);
 
         void cost_aggregation(const DeviceImage &srcL, const DeviceImage &srcR, DeviceImage &dst, int disp_size, int P1, int P2, PathType path_type, int min_disp);
 

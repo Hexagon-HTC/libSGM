@@ -75,19 +75,19 @@ namespace sgm
         type = _type;
     }
 
-    void DeviceImage::upload(const void *_data)
+    void DeviceImage::upload(const void *_data, cudaStream_t stream)
     {
-        CUDA_CHECK(cudaMemcpy(data, _data, elemSize(type) * rows * step, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpyAsync(data, _data, elemSize(type) * rows * step, cudaMemcpyHostToDevice, stream));
     }
 
-    void DeviceImage::download(void *_data) const
+    void DeviceImage::download(void *_data, cudaStream_t stream) const
     {
-        CUDA_CHECK(cudaMemcpy(_data, data, elemSize(type) * rows * step, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpyAsync(_data, data, elemSize(type) * rows * step, cudaMemcpyDeviceToHost, stream));
     }
 
-    void DeviceImage::fill_zero()
+    void DeviceImage::fill_zero(cudaStream_t stream)
     {
-        CUDA_CHECK(cudaMemset(data, 0, elemSize(type) * rows * step));
+        CUDA_CHECK(cudaMemsetAsync(data, 0, elemSize(type) * rows * step, stream));
     }
 
 } // namespace sgm
