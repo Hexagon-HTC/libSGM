@@ -72,13 +72,14 @@ int main(int argc, char *argv[])
     ASSERT_MSG(census_type == sgm::CensusType::CENSUS_9x7 || census_type == sgm::CensusType::SYMMETRIC_CENSUS_9x7, "census type must be 0 or 1.");
 
     const sgm::PathType path_type = num_paths == 8 ? sgm::PathType::SCAN_8PATH : sgm::PathType::SCAN_4PATH;
-    sgm::LibSGMWrapper sgm(disp_size, P1, P2, uniqueness, false, path_type, min_disp, LR_max_diff, census_type);
+    const sgm::StereoSGM::RuntimeParameters runtimeParam(P1, P2, uniqueness, false, path_type, min_disp, LR_max_diff);
+    sgm::LibSGMWrapper sgm(disp_size, census_type);
     cv::Mat disparity;
 
     try
     {
         cv::cuda::GpuMat d_I1(I1), d_I2(I2), d_disparity;
-        sgm.execute(d_I1, d_I2, d_disparity);
+        sgm.execute(d_I1, d_I2, d_disparity, runtimeParam);
         d_disparity.download(disparity);
     }
     catch (const cv::Exception &e)
@@ -88,7 +89,7 @@ int main(int argc, char *argv[])
     }
 
     // create mask for invalid disp
-    const cv::Mat mask = disparity == sgm.getInvalidDisparity();
+    const cv::Mat mask = disparity == sgm.getInvalidDisparity(runtimeParam);
 
     // show image
     cv::Mat disparity_8u, disparity_color;

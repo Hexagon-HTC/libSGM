@@ -75,15 +75,16 @@ int main(int argc, char *argv[])
     const int dst_depth = 16;
     const sgm::PathType path_type = num_paths == 8 ? sgm::PathType::SCAN_8PATH : sgm::PathType::SCAN_4PATH;
 
-    const sgm::StereoSGM::Parameters param(P1, P2, uniqueness, false, path_type, min_disp, LR_max_diff, census_type);
+    const sgm::StereoSGM::RuntimeParameters runtimeParam(P1, P2, uniqueness, false, path_type, min_disp, LR_max_diff);
+    const sgm::StereoSGM::Parameters param{census_type};
     sgm::StereoSGM ssgm(I1.cols, I1.rows, disp_size, src_depth, dst_depth, sgm::EXECUTE_INOUT_HOST2HOST, param);
 
     cv::Mat disparity(I1.size(), CV_16S);
 
-    ssgm.execute(I1.data, I2.data, disparity.data);
+    ssgm.execute(I1.data, I2.data, disparity.data, runtimeParam);
 
     // create mask for invalid disp
-    const cv::Mat mask = disparity == ssgm.get_invalid_disparity();
+    const cv::Mat mask = disparity == ssgm.get_invalid_disparity(runtimeParam);
 
     // show image
     cv::Mat disparity_8u, disparity_color;

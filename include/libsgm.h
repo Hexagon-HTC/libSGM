@@ -86,9 +86,18 @@ namespace sgm
         static const int SUBPIXEL_SCALE = (1 << SUBPIXEL_SHIFT);
 
         /**
-         * @brief Available options for StereoSGM
+         * @brief Construction-time options for StereoSGM.
          */
         struct Parameters
+        {
+            CensusType census_type = CensusType::CLASSIC_CENSUS_9x7;
+        };
+
+        /**
+         * @brief Runtime options passed to each execute() call.
+         * These are pure algorithmic settings that do not affect memory allocation.
+         */
+        struct RuntimeParameters
         {
             int P1;
             int P2;
@@ -97,20 +106,18 @@ namespace sgm
             PathType path_type;
             int min_disp;
             int LR_max_diff;
-            CensusType census_type;
 
             /**
-             * @param P1 Penalty on the disparity change by plus or minus 1 between nieghbor pixels.
+             * @param P1 Penalty on the disparity change by plus or minus 1 between neighbor pixels.
              * @param P2 Penalty on the disparity change by more than 1 between neighbor pixels.
              * @param uniqueness Margin in ratio by which the best cost function value should be at least second one.
              * @param subpixel Disparity value has 4 fractional bits if subpixel option is enabled.
              * @param path_type Number of scanlines used in cost aggregation.
              * @param min_disp Minimum possible disparity value.
              * @param LR_max_diff Acceptable difference pixels which is used in LR check consistency. LR check consistency will be disabled if this value is set to negative.
-             * @param census_type Type of census transform.
              */
-            LIBSGM_API Parameters(int P1 = 10, int P2 = 120, float uniqueness = 0.95f, bool subpixel = false, PathType path_type = PathType::SCAN_8PATH, int min_disp = 0,
-                                  int LR_max_diff = 1, CensusType census_type = CensusType::SYMMETRIC_CENSUS_9x7);
+            LIBSGM_API RuntimeParameters(int P1 = 10, int P2 = 120, float uniqueness = 0.95f, bool subpixel = false, PathType path_type = PathType::SCAN_8PATH, int min_disp = 0,
+                                         int LR_max_diff = 1);
         };
 
         /**
@@ -145,28 +152,29 @@ namespace sgm
 
         /**
          * Execute stereo semi global matching.
-         * @param left_pixels  A pointer stored input left image.
-         * @param right_pixels A pointer stored input right image.
-         * @param dst          Output pointer. User must allocate enough memory.
+         * @param left_pixels   A pointer stored input left image.
+         * @param right_pixels  A pointer stored input right image.
+         * @param dst           Output pointer. User must allocate enough memory.
+         * @param runtime_param Runtime algorithmic parameters (P1, P2, min_disp, etc.).
          * @attention
          * You need to allocate dst memory at least width x height x sizeof(element_type) bytes.
          * The element_type is uint8_t for output_depth_bits == 8 and uint16_t for output_depth_bits == 16.
          * Note that dst element value would be multiplied StereoSGM::SUBPIXEL_SCALE if subpixel option was enabled.
          * Value of Invalid disparity is equal to return value of `get_invalid_disparity` member function.
          */
-        LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst);
+        LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst, const RuntimeParameters &runtime_param = RuntimeParameters());
 
         /**
-         * Generate invalid disparity value from Parameter::min_disp and Parameter::subpixel
+         * Generate invalid disparity value from RuntimeParameters::min_disp and RuntimeParameters::subpixel.
          * @attention
          * Cast properly if you receive disparity value as `unsigned` type.
          * See sample/movie for an example of this.
          */
-        LIBSGM_API int get_invalid_disparity() const;
+        LIBSGM_API int get_invalid_disparity(const RuntimeParameters &runtime_param) const;
 
     private:
-        StereoSGM(const StereoSGM &);
-        StereoSGM &operator=(const StereoSGM &);
+        StereoSGM(const StereoSGM &) = delete;
+        StereoSGM &operator=(const StereoSGM &) = delete;
 
         class Impl;
         Impl *impl_;

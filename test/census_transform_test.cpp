@@ -65,6 +65,36 @@ namespace sgm
         }
     }
 
+    template<typename T>
+    static void classic_census_9x7_(const HostImage &src, HostImage &dst)
+    {
+        constexpr int RADIUS_U = 9 / 2;
+        constexpr int RADIUS_V = 7 / 2;
+
+        dst.fill_zero();
+
+        for (int v = RADIUS_V; v < src.rows - RADIUS_V; v++)
+        {
+            uint64_t *ptrDst = dst.ptr<uint64_t>(v);
+            for (int u = RADIUS_U; u < src.cols - RADIUS_U; u++)
+            {
+                uint64_t f = 0;
+                for (int dv = -RADIUS_V; dv <= RADIUS_V; dv++)
+                {
+                    for (int du = -RADIUS_U; du <= RADIUS_U; du++)
+                    {
+                        if (du != 0 || dv != 0) // skip only the center pixel
+                        {
+                            f <<= 1;
+                            f |= (src.ptr<T>(v)[u] > src.ptr<T>(v + dv)[u + du]);
+                        }
+                    }
+                }
+                ptrDst[u] = f;
+            }
+        }
+    }
+
     void census_transform(const HostImage &src, HostImage &dst, CensusType type)
     {
         if (type == CensusType::CENSUS_9x7)
@@ -87,6 +117,16 @@ namespace sgm
             if (src.type == SGM_32U)
                 symmetric_census_9x7_<uint32_t>(src, dst);
         }
+        if (type == CensusType::CLASSIC_CENSUS_9x7)
+        {
+            dst.create(src.rows, src.cols, SGM_64U);
+            if (src.type == SGM_8U)
+                classic_census_9x7_<uint8_t>(src, dst);
+            if (src.type == SGM_16U)
+                classic_census_9x7_<uint16_t>(src, dst);
+            if (src.type == SGM_32U)
+                classic_census_9x7_<uint32_t>(src, dst);
+        }
     }
 
 } // namespace sgm
@@ -101,7 +141,7 @@ TEST(CensusTransformTest, RandomU8)
     const int pitch = 640;
     const ImageType stype = SGM_8U;
     const ImageType dtype = SGM_64U;
-    const CensusType censusType = CensusType::CENSUS_9x7;
+    const CensusType censusType = CensusType::CLASSIC_CENSUS_9x7;
 
     HostImage h_src(h, w, stype, pitch), h_dst(h, w, dtype);
     DeviceImage d_src(h, w, stype, pitch), d_dst(h, w, dtype);
@@ -126,7 +166,7 @@ TEST(CensusTransformTest, RandomU16)
     const int pitch = 640;
     const ImageType stype = SGM_16U;
     const ImageType dtype = SGM_64U;
-    const CensusType censusType = CensusType::CENSUS_9x7;
+    const CensusType censusType = CensusType::CLASSIC_CENSUS_9x7;
 
     HostImage h_src(h, w, stype, pitch), h_dst(h, w, dtype);
     DeviceImage d_src(h, w, stype, pitch), d_dst(h, w, dtype);
@@ -151,7 +191,7 @@ TEST(CensusTransformTest, RandomU32)
     const int pitch = 640;
     const ImageType stype = SGM_32U;
     const ImageType dtype = SGM_64U;
-    const CensusType censusType = CensusType::CENSUS_9x7;
+    const CensusType censusType = CensusType::CLASSIC_CENSUS_9x7;
 
     HostImage h_src(h, w, stype, pitch), h_dst(h, w, dtype);
     DeviceImage d_src(h, w, stype, pitch), d_dst(h, w, dtype);

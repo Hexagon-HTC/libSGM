@@ -19,11 +19,10 @@ limitations under the License.
 namespace sgm
 {
 
-    LibSGMWrapper::LibSGMWrapper(int numDisparity, int P1, int P2, float uniquenessRatio, bool subpixel, PathType pathType, int minDisparity, int lrMaxDiff,
-                                 CensusType censusType) :
+    LibSGMWrapper::LibSGMWrapper(int numDisparity, CensusType censusType) :
         sgm_(nullptr),
         numDisparity_(numDisparity),
-        param_(P1, P2, uniquenessRatio, subpixel, pathType, minDisparity, lrMaxDiff, censusType),
+        param_{censusType},
         prev_(nullptr)
     {
     }
@@ -33,41 +32,13 @@ namespace sgm
     {
         return numDisparity_;
     }
-    float LibSGMWrapper::getUniquenessRatio() const
-    {
-        return param_.uniqueness;
-    }
-    int LibSGMWrapper::getP1() const
-    {
-        return param_.P1;
-    }
-    int LibSGMWrapper::getP2() const
-    {
-        return param_.P2;
-    }
-    bool LibSGMWrapper::hasSubpixel() const
-    {
-        return param_.subpixel;
-    }
-    PathType LibSGMWrapper::getPathType() const
-    {
-        return param_.path_type;
-    }
-    int LibSGMWrapper::getMinDisparity() const
-    {
-        return param_.min_disp;
-    }
-    int LibSGMWrapper::getLrMaxDiff() const
-    {
-        return param_.LR_max_diff;
-    }
     CensusType LibSGMWrapper::getCensusType() const
     {
         return param_.census_type;
     }
-    int LibSGMWrapper::getInvalidDisparity() const
+    int LibSGMWrapper::getInvalidDisparity(const StereoSGM::RuntimeParameters &runtimeParam) const
     {
-        return (param_.min_disp - 1) * (param_.subpixel ? StereoSGM::SUBPIXEL_SCALE : 1);
+        return (runtimeParam.min_disp - 1) * (runtimeParam.subpixel ? StereoSGM::SUBPIXEL_SCALE : 1);
     }
 
     struct LibSGMWrapper::Creator
@@ -129,7 +100,8 @@ namespace sgm
 
 #ifdef BUILD_OPENCV_WRAPPER
 
-    void LibSGMWrapper::execute(const cv::cuda::GpuMat &I1, const cv::cuda::GpuMat &I2, cv::cuda::GpuMat &disparity)
+    void LibSGMWrapper::execute(const cv::cuda::GpuMat &I1, const cv::cuda::GpuMat &I2, cv::cuda::GpuMat &disparity,
+                                const StereoSGM::RuntimeParameters &runtimeParam)
     {
         const cv::Size size = I1.size();
         CV_Assert(size == I2.size());
@@ -147,10 +119,11 @@ namespace sgm
         }
         prev_ = std::move(creator);
 
-        sgm_->execute(I1.data, I2.data, disparity.data);
+        sgm_->execute(I1.data, I2.data, disparity.data, runtimeParam);
     }
 
-    void LibSGMWrapper::execute(const cv::Mat &I1, const cv::Mat &I2, cv::Mat &disparity)
+    void LibSGMWrapper::execute(const cv::Mat &I1, const cv::Mat &I2, cv::Mat &disparity,
+                                const StereoSGM::RuntimeParameters &runtimeParam)
     {
         const cv::Size size = I1.size();
         CV_Assert(size == I2.size());
@@ -168,7 +141,7 @@ namespace sgm
         }
         prev_ = std::move(creator);
 
-        sgm_->execute(I1.data, I2.data, disparity.data);
+        sgm_->execute(I1.data, I2.data, disparity.data, runtimeParam);
     }
 
 #endif // BUILD_OPENCV_WRAPPER

@@ -80,7 +80,8 @@ int main(int argc, char *argv[])
     const int dst_bytes = dst_depth * width * height / 8;
     const sgm::PathType path_type = num_paths == 8 ? sgm::PathType::SCAN_8PATH : sgm::PathType::SCAN_4PATH;
 
-    const sgm::StereoSGM::Parameters param(10, 120, 0.95f, subpixel, path_type, 0, 1, census_type);
+    const sgm::StereoSGM::RuntimeParameters runtimeParam(10, 120, 0.95f, subpixel, path_type, 0, 1);
+    const sgm::StereoSGM::Parameters param{census_type};
     sgm::StereoSGM sgm(width, height, disp_size, src_depth, dst_depth, sgm::EXECUTE_INOUT_CUDA2CUDA, param);
 
     device_buffer d_I1(src_bytes), d_I2(src_bytes), d_disparity(dst_bytes);
@@ -114,7 +115,7 @@ int main(int argc, char *argv[])
     {
         const auto t1 = std::chrono::system_clock::now();
 
-        sgm.execute(d_I1.data, d_I2.data, d_disparity.data);
+        sgm.execute(d_I1.data, d_I2.data, d_disparity.data, runtimeParam);
         cudaDeviceSynchronize();
 
         const auto t2 = std::chrono::system_clock::now();
@@ -135,7 +136,7 @@ int main(int argc, char *argv[])
     // save disparity image
     const int disp_scale = subpixel ? sgm::StereoSGM::SUBPIXEL_SCALE : 1;
     d_disparity.download(disparity.data);
-    colorize_disparity(disparity, disparity, disp_scale * disp_size, disparity == sgm.get_invalid_disparity());
+    colorize_disparity(disparity, disparity, disp_scale * disp_size, disparity == sgm.get_invalid_disparity(runtimeParam));
     cv::imwrite("disparity.png", disparity);
 
     return 0;

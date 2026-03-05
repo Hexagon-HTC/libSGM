@@ -197,14 +197,15 @@ int main(int argc, char *argv[])
     const int src_bytes = src_depth * width * height / 8;
     const int dst_bytes = dst_depth * width * height / 8;
 
-    const sgm::StereoSGM::Parameters param(10, 120, 0.95f, subpixel);
+    const sgm::StereoSGM::RuntimeParameters runtimeParam(10, 120, 0.95f, subpixel);
+    const sgm::StereoSGM::Parameters param;
     sgm::StereoSGM sgm(width, height, disp_size, src_depth, dst_depth, sgm::EXECUTE_INOUT_CUDA2CUDA, param);
 
     device_buffer d_I1(src_bytes), d_I2(src_bytes), d_disparity(dst_bytes);
     cv::Mat disparity(height, width, dst_depth == 8 ? CV_8S : CV_16S), disparity_color, disparity_32f, draw;
     std::vector<cv::Point3f> points;
 
-    const int invalid_disp = sgm.get_invalid_disparity();
+    const int invalid_disp = sgm.get_invalid_disparity(runtimeParam);
     const int disp_scale = subpixel ? sgm::StereoSGM::SUBPIXEL_SCALE : 1;
 
     for (int frame_no = start_number;; frame_no++)
@@ -222,7 +223,7 @@ int main(int argc, char *argv[])
 
         const auto t1 = std::chrono::system_clock::now();
 
-        sgm.execute(d_I1.data, d_I2.data, d_disparity.data);
+        sgm.execute(d_I1.data, d_I2.data, d_disparity.data, runtimeParam);
         cudaDeviceSynchronize();
 
         const auto t2 = std::chrono::system_clock::now();

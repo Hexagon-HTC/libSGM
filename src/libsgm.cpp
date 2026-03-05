@@ -60,15 +60,15 @@ namespace sgm
             width_(width),
             height_(height),
             disp_size_(disparity_size),
+            dst_depth_(dst_depth),
             src_pitch_(src_pitch),
             dst_pitch_(dst_pitch),
-            param_(param)
+            census_type_(param.census_type)
         {
             // check values
             SGM_ASSERT(src_depth == 8 || src_depth == 16 || src_depth == 32, "src depth bits must be 8, 16 or 32");
             SGM_ASSERT(dst_depth == 8 || dst_depth == 16, "dst depth bits must be 8 or 16");
             SGM_ASSERT(disparity_size == 64 || disparity_size == 128 || disparity_size == 256, "disparity size must be 64 or 128 or 256");
-            SGM_ASSERT(has_enough_depth(dst_depth, disparity_size, param_.min_disp, param_.subpixel), "output depth bits must be sufficient for representing output value");
 
             src_type_ = src_depth == 8 ? SGM_8U : src_depth == 16 ? SGM_16U : SGM_32U;
             dst_type_ = dst_depth == 8 ? SGM_8U : SGM_16U;
@@ -82,9 +82,9 @@ namespace sgm
                 d_srcR_.create(height, width, src_type_, src_pitch);
             }
 
-            const ImageType census_type = param.census_type == CensusType::CENSUS_9x7 ? SGM_64U : SGM_32U;
-            d_censusL_.create(height, width, census_type);
-            d_censusR_.create(height, width, census_type);
+            const ImageType census_image_type = param.census_type == CensusType::CENSUS_9x7 ? SGM_64U : SGM_32U;
+            d_censusL_.create(height, width, census_image_type);
+            d_censusR_.create(height, width, census_image_type);
             d_censusL_.fill_zero();
             d_censusR_.fill_zero();
 
@@ -98,8 +98,9 @@ namespace sgm
             d_dispR_.create(height, width, SGM_16U, dst_pitch);
         }
 
-        void execute(const void *srcL, const void *srcR, void *dst)
+        void execute(const void *srcL, const void *srcR, void *dst, const RuntimeParameters &rp)
         {
+            SGM_ASSERT(has_enough_depth(dst_depth_, disp_size_, rp.min_disp, rp.subpixel), "output depth bits must be sufficient for representing output value");
             if (is_src_devptr_)
             {
                 d_srcL_.create((void *)srcL, height_, width_, src_type_, src_pitch_);
@@ -117,22 +118,22 @@ namespace sgm
             }
 
             // census transform
-            details::census_transform(d_srcL_, d_censusL_, param_.census_type);
-            details::census_transform(d_srcR_, d_censusR_, param_.census_type);
+            details::census_transform(d_srcL_, d_censusL_, census_type_);
+            details::census_transform(d_srcR_, d_censusR_, census_type_);
 
             // cost aggregation
-            details::cost_aggregation(d_censusL_, d_censusR_, d_cost_, disp_size_, param_.P1, param_.P2, param_.path_type, param_.min_disp);
+            details::cost_aggregation(d_censusL_, d_censusR_, d_cost_, disp_size_, rp.P1, rp.P2, rp.path_type, rp.min_disp);
 
             // winner-takes-all
-            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
+            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, rp.uniqueness, rp.subpixel, rp.path_type);
 
             // post filtering
             details::median_filter(d_tmpL_, d_dispL_);
             details::median_filter(d_tmpR_, d_dispR_);
 
             // consistency check
-            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
-            details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, rp.subpixel, rp.LR_max_diff);
+            details::correct_disparity_range(d_dispL_, rp.subpixel, rp.min_disp);
 
             if (!is_dst_devptr_ && dst_type_ == SGM_8U)
             {
@@ -158,18 +159,19 @@ namespace sgm
             }
         }
 
-        int get_invalid_disparity() const
+        int get_invalid_disparity(const RuntimeParameters &rp) const
         {
-            return (param_.min_disp - 1) * (param_.subpixel ? SUBPIXEL_SCALE : 1);
+            return (rp.min_disp - 1) * (rp.subpixel ? SUBPIXEL_SCALE : 1);
         }
 
     private:
         int width_;
         int height_;
         int disp_size_;
+        int dst_depth_;
         int src_pitch_;
         int dst_pitch_;
-        Parameters param_;
+        CensusType census_type_;
 
         ImageType src_type_;
         ImageType dst_type_;
@@ -187,15 +189,14 @@ namespace sgm
         DeviceImage d_dispR_;
     };
 
-    StereoSGM::Parameters::Parameters(int P1, int P2, float uniqueness, bool subpixel, PathType path_type, int min_disp, int LR_max_diff, CensusType census_type) :
+    StereoSGM::RuntimeParameters::RuntimeParameters(int P1, int P2, float uniqueness, bool subpixel, PathType path_type, int min_disp, int LR_max_diff) :
         P1(P1),
         P2(P2),
         uniqueness(uniqueness),
         subpixel(subpixel),
         path_type(path_type),
         min_disp(min_disp),
-        LR_max_diff(LR_max_diff),
-        census_type(census_type)
+        LR_max_diff(LR_max_diff)
     {
     }
 
@@ -214,14 +215,14 @@ namespace sgm
         delete impl_;
     }
 
-    void StereoSGM::execute(const void *srcL, const void *srcR, void *dst)
+    void StereoSGM::execute(const void *srcL, const void *srcR, void *dst, const RuntimeParameters &runtime_param)
     {
-        impl_->execute(srcL, srcR, dst);
+        impl_->execute(srcL, srcR, dst, runtime_param);
     }
 
-    int StereoSGM::get_invalid_disparity() const
+    int StereoSGM::get_invalid_disparity(const RuntimeParameters &runtime_param) const
     {
-        return impl_->get_invalid_disparity();
+        return impl_->get_invalid_disparity(runtime_param);
     }
 
 } // namespace sgm

@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
     device_buffer d_I1(src_bytes), d_I2(src_bytes), d_disparity(dst_bytes);
     cv::Mat disparity(height, width, dst_depth == 8 ? CV_8S : CV_16S), disparity_color;
 
-    const int invalid_disp = sgm.get_invalid_disparity();
+    const int invalid_disp = sgm.get_invalid_disparity(sgm::StereoSGM::RuntimeParameters());
 
     for (int frame_no = start_number;; frame_no++)
     {

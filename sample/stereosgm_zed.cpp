@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
     device_buffer d_disparity(dst_bytes);
     cv::Mat disparity(height, width, dst_depth == 8 ? CV_8S : CV_16S), disparity_color;
 
-    const int invalid_disp = sgm.get_invalid_disparity();
+    const int invalid_disp = sgm.get_invalid_disparity(sgm::StereoSGM::RuntimeParameters());
 
     std::cout << "max disparity    : " << disp_size << std::endl;
     std::cout << "camera resolution: " << sl::toString(initParameters.camera_resolution) << " " << cv::Size(width, height) << std::endl;
