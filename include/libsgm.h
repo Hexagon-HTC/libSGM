@@ -90,7 +90,7 @@ namespace sgm
          */
         struct Parameters
         {
-            CensusType census_type = CensusType::CLASSIC_CENSUS_9x7;
+            CensusType census_type = ::sgm::CensusType::CLASSIC_CENSUS_9x7;
         };
 
         /**
