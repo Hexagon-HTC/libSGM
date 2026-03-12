@@ -14,6 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// This file contains disparity 512 winner-takes-all kernel.
+// Compiled separately to allow 64/128/256 to use optimal parameters.
+
 #include "internal.h"
 #include "disparity_512.h"
 
@@ -24,7 +27,7 @@ limitations under the License.
 
 namespace sgm
 {
-    namespace
+    namespace winner_takes_all_512_impl
     {
 
         static constexpr unsigned int WARPS_PER_BLOCK = 8u;
@@ -144,25 +147,21 @@ namespace sgm
                     const unsigned int x = x0 + x1;
                     if (x < width)
                     {
-                        // Load sum of costs
                         const unsigned int smem_x = x1 % ACCUMULATION_INTERVAL;
                         const unsigned int k0 = lane_id * REDUCTION_PER_THREAD;
                         uint32_t local_cost_sum[REDUCTION_PER_THREAD];
                         load_uint16_vector<REDUCTION_PER_THREAD>(local_cost_sum, &smem_cost_sum[warp_id][smem_x][k0]);
-                        // Pack sum of costs and dispairty
                         uint32_t local_packed_cost[REDUCTION_PER_THREAD];
                         for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
                         {
                             local_packed_cost[i] = pack_cost_index(local_cost_sum[i], k0 + i);
                         }
-                        // Update left
                         uint32_t best = 0xffffffffu;
                         for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
                         {
                             best = min(best, local_packed_cost[i]);
                         }
                         best = subgroup_min<WARP_SIZE>(best, 0xffffffffu);
-                        // Update right
 #pragma unroll
                         for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
                         {
@@ -185,7 +184,6 @@ namespace sgm
                                 right_best[i] = 0xffffffffu;
                             }
                         }
-                        // Resume updating left to avoid execution dependency
                         const uint32_t bestCost = unpack_cost(best);
                         const int bestDisp = unpack_index(best);
                         bool uniq = true;
@@ -215,14 +213,10 @@ namespace sgm
             }
         }
 
-    } // namespace
-
-    namespace details
-    {
-
-        template<int MAX_DISPARITY>
-        void winner_takes_all_(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, float uniqueness, bool subpixel, PathType path_type)
+        void winner_takes_all_512_impl(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, float uniqueness, bool subpixel, PathType path_type)
         {
+            constexpr int MAX_DISPARITY = 512;
+
             const int width = dstL.cols;
             const int height = dstL.rows;
             const int pitch = dstL.step;
@@ -254,25 +248,14 @@ namespace sgm
             CUDA_CHECK(cudaGetLastError());
         }
 
-        void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type)
+    } // namespace winner_takes_all_512_impl
+
+    namespace details
+    {
+
+        void winner_takes_all_512(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, float uniqueness, bool subpixel, PathType path_type)
         {
-            if (disp_size == 64)
-            {
-                winner_takes_all_<64>(src, dstL, dstR, uniqueness, subpixel, path_type);
-            }
-            else if (disp_size == 128)
-            {
-                winner_takes_all_<128>(src, dstL, dstR, uniqueness, subpixel, path_type);
-            }
-            else if (disp_size == 256)
-            {
-                winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type);
-            }
-            else if (disp_size == 512)
-            {
-                // 512 disparity in separate compilation unit
-                winner_takes_all_512(src, dstL, dstR, uniqueness, subpixel, path_type);
-            }
+            winner_takes_all_512_impl::winner_takes_all_512_impl(src, dstL, dstR, uniqueness, subpixel, path_type);
         }
 
     } // namespace details
