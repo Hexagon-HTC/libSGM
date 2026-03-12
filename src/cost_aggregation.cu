@@ -556,8 +556,16 @@ namespace sgm
                 cudaStreamDestroy(streams[i]);
         }
 
-        void cost_aggregation(const DeviceImage &srcL, const DeviceImage &srcR, DeviceImage &dst, int disp_size, int P1, int P2, PathType path_type, int min_disp)
+        void cost_aggregation(const DeviceImage &srcL, const DeviceImage &srcR, DeviceImage &dst, int disp_size, int P1, int P2, PathType path_type, int min_disp, cudaStream_t stream)
         {
+            // Note: cost_aggregation uses internally created streams for parallel path processing.
+            // The passed stream parameter ensures proper ordering with other operations in the pipeline.
+            // We synchronize on the passed stream first to ensure any prior operations complete.
+            if (stream)
+            {
+                cudaStreamSynchronize(stream);
+            }
+
             SGM_ASSERT(srcL.type == srcR.type, "left and right image type must be same.");
 
             if (srcL.type == SGM_32U)

@@ -29,18 +29,18 @@ namespace sgm
 
         void census_transform(const DeviceImage &src, DeviceImage &dst, CensusType type, cudaStream_t stream = 0);
 
-        void cost_aggregation(const DeviceImage &srcL, const DeviceImage &srcR, DeviceImage &dst, int disp_size, int P1, int P2, PathType path_type, int min_disp);
+        void cost_aggregation(const DeviceImage &srcL, const DeviceImage &srcR, DeviceImage &dst, int disp_size, int P1, int P2, PathType path_type, int min_disp, cudaStream_t stream = 0);
 
-        void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type);
+        void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type, cudaStream_t stream = 0);
 
-        void median_filter(const DeviceImage &src, DeviceImage &dst);
+        void median_filter(const DeviceImage &src, DeviceImage &dst, cudaStream_t stream = 0);
 
-        void check_consistency(DeviceImage &dispL, const DeviceImage &dispR, const DeviceImage &srcL, bool subpixel, int LR_max_diff);
+        void check_consistency(DeviceImage &dispL, const DeviceImage &dispR, const DeviceImage &srcL, bool subpixel, int LR_max_diff, cudaStream_t stream = 0);
 
-        void correct_disparity_range(DeviceImage &disp, bool subpixel, int min_disp);
+        void correct_disparity_range(DeviceImage &disp, bool subpixel, int min_disp, cudaStream_t stream = 0);
 
-        void cast_16bit_to_8bit(const DeviceImage &src, DeviceImage &dst);
-        void cast_8bit_to_16bit(const DeviceImage &src, DeviceImage &dst);
+        void cast_16bit_to_8bit(const DeviceImage &src, DeviceImage &dst, cudaStream_t stream = 0);
+        void cast_8bit_to_16bit(const DeviceImage &src, DeviceImage &dst, cudaStream_t stream = 0);
 
     } // namespace details
 } // namespace sgm

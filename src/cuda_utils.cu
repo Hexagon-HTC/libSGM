@@ -44,7 +44,7 @@ namespace sgm
     namespace details
     {
 
-        void cast_16bit_to_8bit(const DeviceImage &src, DeviceImage &dst)
+        void cast_16bit_to_8bit(const DeviceImage &src, DeviceImage &dst, cudaStream_t stream)
         {
             const int w = src.cols;
             const int h = src.rows;
@@ -54,11 +54,11 @@ namespace sgm
             const int block = 1024;
             const int grid = divUp(num_elements, block);
 
-            cast_16bit_8bit_array_kernel<<<grid, block>>>(src.ptr<uint16_t>(), dst.ptr<uint8_t>(), num_elements);
+            cast_16bit_8bit_array_kernel<<<grid, block, 0, stream>>>(src.ptr<uint16_t>(), dst.ptr<uint8_t>(), num_elements);
             CUDA_CHECK(cudaGetLastError());
         }
 
-        void cast_8bit_to_16bit(const DeviceImage &src, DeviceImage &dst)
+        void cast_8bit_to_16bit(const DeviceImage &src, DeviceImage &dst, cudaStream_t stream)
         {
             const int w = src.cols;
             const int h = src.rows;
@@ -68,7 +68,7 @@ namespace sgm
             const int block = 1024;
             const int grid = divUp(num_elements, block);
 
-            cast_8bit_16bit_array_kernel<<<grid, block>>>(src.ptr<uint8_t>(), dst.ptr<uint16_t>(), num_elements);
+            cast_8bit_16bit_array_kernel<<<grid, block, 0, stream>>>(src.ptr<uint8_t>(), dst.ptr<uint16_t>(), num_elements);
             CUDA_CHECK(cudaGetLastError());
         }
 

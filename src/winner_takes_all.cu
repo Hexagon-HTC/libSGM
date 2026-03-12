@@ -220,7 +220,7 @@ namespace sgm
     {
 
         template<int MAX_DISPARITY>
-        void winner_takes_all_(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, float uniqueness, bool subpixel, PathType path_type)
+        void winner_takes_all_(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, float uniqueness, bool subpixel, PathType path_type, cudaStream_t stream)
         {
             const int width = dstL.cols;
             const int height = dstL.rows;
@@ -235,41 +235,41 @@ namespace sgm
 
             if (subpixel && path_type == PathType::SCAN_8PATH)
             {
-                winner_takes_all_kernel<MAX_DISPARITY, 8, compute_disparity_subpixel<MAX_DISPARITY>><<<gdim, bdim>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
+                winner_takes_all_kernel<MAX_DISPARITY, 8, compute_disparity_subpixel<MAX_DISPARITY>><<<gdim, bdim, 0, stream>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
             }
             else if (subpixel && path_type == PathType::SCAN_4PATH)
             {
-                winner_takes_all_kernel<MAX_DISPARITY, 4, compute_disparity_subpixel<MAX_DISPARITY>><<<gdim, bdim>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
+                winner_takes_all_kernel<MAX_DISPARITY, 4, compute_disparity_subpixel<MAX_DISPARITY>><<<gdim, bdim, 0, stream>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
             }
             else if (!subpixel && path_type == PathType::SCAN_8PATH)
             {
-                winner_takes_all_kernel<MAX_DISPARITY, 8, compute_disparity_normal><<<gdim, bdim>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
+                winner_takes_all_kernel<MAX_DISPARITY, 8, compute_disparity_normal><<<gdim, bdim, 0, stream>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
             }
             else /* if (!subpixel && path_type == PathType::SCAN_4PATH) */
             {
-                winner_takes_all_kernel<MAX_DISPARITY, 4, compute_disparity_normal><<<gdim, bdim>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
+                winner_takes_all_kernel<MAX_DISPARITY, 4, compute_disparity_normal><<<gdim, bdim, 0, stream>>>(dispL, dispR, cost, width, height, pitch, uniqueness);
             }
 
             CUDA_CHECK(cudaGetLastError());
         }
 
-        void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type)
+        void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type, cudaStream_t stream)
         {
             if (disp_size == 64)
             {
-                winner_takes_all_<64>(src, dstL, dstR, uniqueness, subpixel, path_type);
+                winner_takes_all_<64>(src, dstL, dstR, uniqueness, subpixel, path_type, stream);
             }
             else if (disp_size == 128)
             {
-                winner_takes_all_<128>(src, dstL, dstR, uniqueness, subpixel, path_type);
+                winner_takes_all_<128>(src, dstL, dstR, uniqueness, subpixel, path_type, stream);
             }
             else if (disp_size == 256)
             {
-                winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type);
+                winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type, stream);
             }
             else if (disp_size == 512)
             {
-                winner_takes_all_<512>(src, dstL, dstR, uniqueness, subpixel, path_type);
+                winner_takes_all_<512>(src, dstL, dstR, uniqueness, subpixel, path_type, stream);
             }
         }
 

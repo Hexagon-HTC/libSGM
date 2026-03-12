@@ -57,7 +57,7 @@ namespace sgm
     namespace details
     {
 
-        void check_consistency(DeviceImage &dispL, const DeviceImage &dispR, const DeviceImage &srcL, bool subpixel, int LR_max_diff)
+        void check_consistency(DeviceImage &dispL, const DeviceImage &dispR, const DeviceImage &srcL, bool subpixel, int LR_max_diff, cudaStream_t stream)
         {
             SGM_ASSERT(dispL.type == SGM_16U && dispR.type == SGM_16U, "");
 
@@ -71,19 +71,19 @@ namespace sgm
             {
                 using SRC_T = uint8_t;
                 check_consistency_kernel<SRC_T>
-                    <<<grid, block>>>(dispL.ptr<uint16_t>(), dispR.ptr<uint16_t>(), srcL.ptr<SRC_T>(), w, h, srcL.step, dispL.step, subpixel, LR_max_diff);
+                    <<<grid, block, 0, stream>>>(dispL.ptr<uint16_t>(), dispR.ptr<uint16_t>(), srcL.ptr<SRC_T>(), w, h, srcL.step, dispL.step, subpixel, LR_max_diff);
             }
             else if (srcL.type == SGM_16U)
             {
                 using SRC_T = uint16_t;
                 check_consistency_kernel<SRC_T>
-                    <<<grid, block>>>(dispL.ptr<uint16_t>(), dispR.ptr<uint16_t>(), srcL.ptr<SRC_T>(), w, h, srcL.step, dispL.step, subpixel, LR_max_diff);
+                    <<<grid, block, 0, stream>>>(dispL.ptr<uint16_t>(), dispR.ptr<uint16_t>(), srcL.ptr<SRC_T>(), w, h, srcL.step, dispL.step, subpixel, LR_max_diff);
             }
             else
             {
                 using SRC_T = uint32_t;
                 check_consistency_kernel<SRC_T>
-                    <<<grid, block>>>(dispL.ptr<uint16_t>(), dispR.ptr<uint16_t>(), srcL.ptr<SRC_T>(), w, h, srcL.step, dispL.step, subpixel, LR_max_diff);
+                    <<<grid, block, 0, stream>>>(dispL.ptr<uint16_t>(), dispR.ptr<uint16_t>(), srcL.ptr<SRC_T>(), w, h, srcL.step, dispL.step, subpixel, LR_max_diff);
             }
 
             CUDA_CHECK(cudaGetLastError());

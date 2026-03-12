@@ -62,13 +62,17 @@ namespace sgm
             disp_size_(disparity_size),
             src_pitch_(src_pitch),
             dst_pitch_(dst_pitch),
-            param_(param)
+            param_(param),
+            stream_(nullptr)
         {
             // check values
             SGM_ASSERT(src_depth == 8 || src_depth == 16 || src_depth == 32, "src depth bits must be 8, 16 or 32");
             SGM_ASSERT(dst_depth == 8 || dst_depth == 16, "dst depth bits must be 8 or 16");
             SGM_ASSERT(disparity_size == 64 || disparity_size == 128 || disparity_size == 256 || disparity_size == 512, "disparity size must be 64, 128, 256 or 512");
             SGM_ASSERT(has_enough_depth(dst_depth, disparity_size, param_.min_disp, param_.subpixel), "output depth bits must be sufficient for representing output value");
+
+            // Create dedicated CUDA stream for this instance
+            cudaStreamCreate(&stream_);
 
             src_type_ = src_depth == 8 ? SGM_8U : src_depth == 16 ? SGM_16U : SGM_32U;
             dst_type_ = dst_depth == 8 ? SGM_8U : SGM_16U;
@@ -85,8 +89,8 @@ namespace sgm
             const ImageType census_type = param.census_type == CensusType::CENSUS_9x7 ? SGM_64U : SGM_32U;
             d_censusL_.create(height, width, census_type);
             d_censusR_.create(height, width, census_type);
-            d_censusL_.fill_zero();
-            d_censusR_.fill_zero();
+            d_censusL_.fill_zero(stream_);
+            d_censusR_.fill_zero(stream_);
 
             d_tmpL_.create(height, width, SGM_16U, dst_pitch);
             d_tmpR_.create(height, width, SGM_16U, dst_pitch);
@@ -98,6 +102,15 @@ namespace sgm
             d_dispR_.create(height, width, SGM_16U, dst_pitch);
         }
 
+        ~Impl()
+        {
+            if (stream_)
+            {
+                cudaStreamDestroy(stream_);
+                stream_ = nullptr;
+            }
+        }
+
         void execute(const void *srcL, const void *srcR, void *dst)
         {
             if (is_src_devptr_)
@@ -107,8 +120,8 @@ namespace sgm
             }
             else
             {
-                d_srcL_.upload(srcL);
-                d_srcR_.upload(srcR);
+                d_srcL_.upload(srcL, stream_);
+                d_srcR_.upload(srcR, stream_);
             }
             if (is_dst_devptr_ && dst_type_ == SGM_16U)
             {
@@ -117,36 +130,36 @@ namespace sgm
             }
 
             // census transform
-            details::census_transform(d_srcL_, d_censusL_, param_.census_type);
-            details::census_transform(d_srcR_, d_censusR_, param_.census_type);
+            details::census_transform(d_srcL_, d_censusL_, param_.census_type, stream_);
+            details::census_transform(d_srcR_, d_censusR_, param_.census_type, stream_);
 
             // cost aggregation
-            details::cost_aggregation(d_censusL_, d_censusR_, d_cost_, disp_size_, param_.P1, param_.P2, param_.path_type, param_.min_disp);
+            details::cost_aggregation(d_censusL_, d_censusR_, d_cost_, disp_size_, param_.P1, param_.P2, param_.path_type, param_.min_disp, stream_);
 
             // winner-takes-all
-            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
+            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type, stream_);
 
             // post filtering
-            details::median_filter(d_tmpL_, d_dispL_);
-            details::median_filter(d_tmpR_, d_dispR_);
+            details::median_filter(d_tmpL_, d_dispL_, stream_);
+            details::median_filter(d_tmpR_, d_dispR_, stream_);
 
             // consistency check
-            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
-            details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff, stream_);
+            details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp, stream_);
 
             if (!is_dst_devptr_ && dst_type_ == SGM_8U)
             {
-                details::cast_16bit_to_8bit(d_dispL_, d_tmpL_);
-                d_tmpL_.download(dst);
+                details::cast_16bit_to_8bit(d_dispL_, d_tmpL_, stream_);
+                d_tmpL_.download(dst, stream_);
             }
             else if (is_dst_devptr_ && dst_type_ == SGM_8U)
             {
                 DeviceImage d_dst(dst, height_, width_, SGM_8U, dst_pitch_);
-                details::cast_16bit_to_8bit(d_dispL_, d_dst);
+                details::cast_16bit_to_8bit(d_dispL_, d_dst, stream_);
             }
             else if (!is_dst_devptr_ && dst_type_ == SGM_16U)
             {
-                d_dispL_.download(dst);
+                d_dispL_.download(dst, stream_);
             }
             else if (is_dst_devptr_ && dst_type_ == SGM_16U)
             {
@@ -156,6 +169,9 @@ namespace sgm
             {
                 std::cerr << "not impl" << std::endl;
             }
+
+            // Synchronize to ensure all operations complete before returning
+            cudaStreamSynchronize(stream_);
         }
 
         int get_invalid_disparity() const
@@ -185,6 +201,8 @@ namespace sgm
         DeviceImage d_tmpR_;
         DeviceImage d_dispL_;
         DeviceImage d_dispR_;
+
+        cudaStream_t stream_;
     };
 
     StereoSGM::Parameters::Parameters(int P1, int P2, float uniqueness, bool subpixel, PathType path_type, int min_disp, int LR_max_diff, CensusType census_type) :

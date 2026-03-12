@@ -53,7 +53,7 @@ namespace sgm
     namespace details
     {
 
-        void correct_disparity_range(DeviceImage &disp, bool subpixel, int min_disp)
+        void correct_disparity_range(DeviceImage &disp, bool subpixel, int min_disp, cudaStream_t stream)
         {
             if (!subpixel && min_disp == 0)
             {
@@ -70,7 +70,7 @@ namespace sgm
             const int min_disp_scaled = min_disp * scale;
             const int invalid_disp_scaled = (min_disp - 1) * scale;
 
-            correct_disparity_range_kernel<<<blocks, threads>>>(disp.ptr<uint16_t>(), w, h, disp.step, min_disp_scaled, invalid_disp_scaled);
+            correct_disparity_range_kernel<<<blocks, threads, 0, stream>>>(disp.ptr<uint16_t>(), w, h, disp.step, min_disp_scaled, invalid_disp_scaled);
             CUDA_CHECK(cudaGetLastError());
         }
 

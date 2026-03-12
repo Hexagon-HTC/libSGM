@@ -328,7 +328,7 @@ namespace sgm
     namespace details
     {
 
-        void median_filter(const DeviceImage &src, DeviceImage &dst)
+        void median_filter(const DeviceImage &src, DeviceImage &dst, cudaStream_t stream)
         {
             const int w = src.cols;
             const int h = src.rows;
@@ -344,12 +344,12 @@ namespace sgm
                 if (pitch % 4 == 0)
                 {
                     const dim3 grid(divUp(divUp(w, 4), block.x), divUp(h, block.y));
-                    median_kernel_3x3_8u_v4<<<grid, block>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
+                    median_kernel_3x3_8u_v4<<<grid, block, 0, stream>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
                 }
                 else
                 {
                     const dim3 grid(divUp(w, block.x), divUp(h, block.y));
-                    median_kernel_3x3_8u<<<grid, block>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
+                    median_kernel_3x3_8u<<<grid, block, 0, stream>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
                 }
             }
             else if (src.type == SGM_16U)
@@ -358,12 +358,12 @@ namespace sgm
                 if (pitch % 2 == 0)
                 {
                     const dim3 grid(divUp(divUp(w, 2), block.x), divUp(h, block.y));
-                    median_kernel_3x3_16u_v2<<<grid, block>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
+                    median_kernel_3x3_16u_v2<<<grid, block, 0, stream>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
                 }
                 else
                 {
                     const dim3 grid(divUp(w, block.x), divUp(h, block.y));
-                    median_kernel_3x3_16u<<<grid, block>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
+                    median_kernel_3x3_16u<<<grid, block, 0, stream>>>(src.ptr<T>(), dst.ptr<T>(), w, h, pitch);
                 }
             }
 
