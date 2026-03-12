@@ -243,7 +243,7 @@ namespace sgm
         namespace horizontal
         {
 
-            static constexpr unsigned int DP_BLOCK_SIZE = 8u;
+            static constexpr unsigned int DP_BLOCK_SIZE = 16u;
             static constexpr unsigned int DP_BLOCKS_PER_THREAD = 1u;
 
             static constexpr unsigned int WARPS_PER_BLOCK = 4u;
@@ -402,7 +402,7 @@ namespace sgm
                     return;
                 }
 
-                __shared__ CENSUS_TYPE right_buffer[2 * DP_BLOCK_SIZE][RIGHT_BUFFER_ROWS];
+                __shared__ CENSUS_TYPE right_buffer[2 * DP_BLOCK_SIZE][RIGHT_BUFFER_ROWS + 1];
                 DynamicProgramming<DP_BLOCK_SIZE, SUBGROUP_SIZE> dp;
 
                 const unsigned int warp_id = threadIdx.x / WARP_SIZE;
@@ -574,6 +574,10 @@ namespace sgm
                 {
                     cost_aggregation_<uint32_t, 256>(srcL, srcR, dst, P1, P2, path_type, min_disp);
                 }
+                else if (disp_size == 512)
+                {
+                    cost_aggregation_<uint32_t, 512>(srcL, srcR, dst, P1, P2, path_type, min_disp);
+                }
             }
             else if (srcL.type == SGM_64U)
             {
@@ -588,6 +592,10 @@ namespace sgm
                 else if (disp_size == 256)
                 {
                     cost_aggregation_<uint64_t, 256>(srcL, srcR, dst, P1, P2, path_type, min_disp);
+                }
+                else if (disp_size == 512)
+                {
+                    cost_aggregation_<uint64_t, 512>(srcL, srcR, dst, P1, P2, path_type, min_disp);
                 }
             }
         }

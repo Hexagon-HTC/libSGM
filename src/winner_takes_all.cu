@@ -267,6 +267,10 @@ namespace sgm
             {
                 winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type);
             }
+            else if (disp_size == 512)
+            {
+                winner_takes_all_<512>(src, dstL, dstR, uniqueness, subpixel, path_type);
+            }
         }
 
     } // namespace details

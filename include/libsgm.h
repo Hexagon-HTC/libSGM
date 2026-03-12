@@ -116,7 +116,7 @@ namespace sgm
         /**
          * @param width Processed image's width.
          * @param height Processed image's height.
-         * @param disparity_size It must be 64, 128 or 256.
+         * @param disparity_size It must be 64, 128, 256 or 512.
          * @param input_depth_bits Processed image's bits per pixel. It must be 8, 16 or 32.
          * @param output_depth_bits Disparity image's bits per pixel. It must be 8 or 16.
          * @param inout_type Specify input/output pointer type. See sgm::EXECUTE_TYPE.
@@ -129,7 +129,7 @@ namespace sgm
         /**
          * @param width Processed image's width.
          * @param height Processed image's height.
-         * @param disparity_size It must be 64, 128 or 256.
+         * @param disparity_size It must be 64, 128, 256 or 512.
          * @param input_depth_bits Processed image's bits per pixel. It must be 8, 16 or 32.
          * @param output_depth_bits Disparity image's bits per pixel. It must be 8 or 16.
          * @param src_pitch Source image's pitch (pixels).

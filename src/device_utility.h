@@ -235,6 +235,13 @@ namespace sgm
         load_uint16_vector<2u>(dest + 6, reinterpret_cast<const uint16_t *>(&uint32x4.w));
     }
 
+    template<>
+    __device__ inline void load_uint16_vector<16u>(uint32_t *dest, const uint16_t *ptr)
+    {
+        load_uint16_vector<8u>(dest + 0, ptr + 0);
+        load_uint16_vector<8u>(dest + 8, ptr + 8);
+    }
+
     template<unsigned int N>
     __device__ inline void store_uint16_vector(uint16_t *dest, const uint32_t *ptr);
 
