@@ -100,20 +100,52 @@ namespace sgm
 
         void execute(const void *srcL, const void *srcR, void *dst)
         {
+            execute(srcL, srcR, dst, width_, height_);
+        }
+
+        void execute(const void *srcL, const void *srcR, void *dst, int actual_width, int actual_height)
+        {
+            // Validate dimensions don't exceed allocated capacity
+            SGM_ASSERT(actual_width > 0 && actual_width <= width_, "actual_width must be > 0 and <= constructor width");
+            SGM_ASSERT(actual_height > 0 && actual_height <= height_, "actual_height must be > 0 and <= constructor height");
+
+            // Compute pitch for actual dimensions (use actual width if smaller, preserving alignment)
+            const int actual_src_pitch = actual_width;
+            const int actual_dst_pitch = actual_width;
+
             if (is_src_devptr_)
             {
-                d_srcL_.create((void *)srcL, height_, width_, src_type_, src_pitch_);
-                d_srcR_.create((void *)srcR, height_, width_, src_type_, src_pitch_);
+                d_srcL_.create((void *)srcL, actual_height, actual_width, src_type_, actual_src_pitch);
+                d_srcR_.create((void *)srcR, actual_height, actual_width, src_type_, actual_src_pitch);
             }
             else
             {
+                // Recreate with actual dimensions for proper upload size
+                d_srcL_.create(actual_height, actual_width, src_type_, actual_src_pitch);
+                d_srcR_.create(actual_height, actual_width, src_type_, actual_src_pitch);
                 d_srcL_.upload(srcL);
                 d_srcR_.upload(srcR);
             }
+
+            // Recreate intermediate buffers with actual dimensions (reuses memory if capacity sufficient)
+            const ImageType census_type = param_.census_type == CensusType::CENSUS_9x7 ? SGM_64U : SGM_32U;
+            d_censusL_.create(actual_height, actual_width, census_type);
+            d_censusR_.create(actual_height, actual_width, census_type);
+            d_censusL_.fill_zero();
+            d_censusR_.fill_zero();
+
+            d_tmpL_.create(actual_height, actual_width, SGM_16U, actual_dst_pitch);
+            d_tmpR_.create(actual_height, actual_width, SGM_16U, actual_dst_pitch);
+            d_dispR_.create(actual_height, actual_width, SGM_16U, actual_dst_pitch);
+
             if (is_dst_devptr_ && dst_type_ == SGM_16U)
             {
-                // when threre is no device-host copy or type conversion, use passed buffer
-                d_dispL_.create((void *)dst, height_, width_, SGM_16U, dst_pitch_);
+                // when there is no device-host copy or type conversion, use passed buffer
+                d_dispL_.create((void *)dst, actual_height, actual_width, SGM_16U, actual_dst_pitch);
+            }
+            else
+            {
+                d_dispL_.create(actual_height, actual_width, SGM_16U, actual_dst_pitch);
             }
 
             // census transform
@@ -141,7 +173,7 @@ namespace sgm
             }
             else if (is_dst_devptr_ && dst_type_ == SGM_8U)
             {
-                DeviceImage d_dst(dst, height_, width_, SGM_8U, dst_pitch_);
+                DeviceImage d_dst(dst, actual_height, actual_width, SGM_8U, actual_dst_pitch);
                 details::cast_16bit_to_8bit(d_dispL_, d_dst);
             }
             else if (!is_dst_devptr_ && dst_type_ == SGM_16U)
@@ -217,6 +249,11 @@ namespace sgm
     void StereoSGM::execute(const void *srcL, const void *srcR, void *dst)
     {
         impl_->execute(srcL, srcR, dst);
+    }
+
+    void StereoSGM::execute(const void *srcL, const void *srcR, void *dst, int actual_width, int actual_height)
+    {
+        impl_->execute(srcL, srcR, dst, actual_width, actual_height);
     }
 
     int StereoSGM::get_invalid_disparity() const

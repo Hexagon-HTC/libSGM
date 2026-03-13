@@ -157,6 +157,19 @@ namespace sgm
         LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst);
 
         /**
+         * Execute stereo semi global matching with specified dimensions.
+         * @param left_pixels  A pointer stored input left image.
+         * @param right_pixels A pointer stored input right image.
+         * @param dst          Output pointer. User must allocate enough memory.
+         * @param actual_width  Actual width of the images to process (must be <= constructor width).
+         * @param actual_height Actual height of the images to process (must be <= constructor height).
+         * @attention
+         * This overload allows processing smaller images using pre-allocated buffers.
+         * The actual dimensions must not exceed the dimensions specified in the constructor.
+         */
+        LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst, int actual_width, int actual_height);
+
+        /**
          * Generate invalid disparity value from Parameter::min_disp and Parameter::subpixel
          * @attention
          * Cast properly if you receive disparity value as `unsigned` type.
