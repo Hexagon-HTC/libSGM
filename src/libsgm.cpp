@@ -156,6 +156,9 @@ namespace sgm
             {
                 std::cerr << "not impl" << std::endl;
             }
+
+            // synchronize to ensure all async GPU work is complete and detect any deferred errors
+            CUDA_CHECK(cudaDeviceSynchronize());
         }
 
         int get_invalid_disparity() const

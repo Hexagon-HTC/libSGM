@@ -48,6 +48,10 @@ namespace sgm
         {
             release();
             CUDA_CHECK(cudaMalloc(&data_, size));
+            if (data_ == nullptr)
+            {
+                throw std::runtime_error("cudaMalloc returned nullptr");
+            }
             ref_count_ = new int(1);
             capacity_ = size;
         }
@@ -65,7 +69,7 @@ namespace sgm
     {
         if (ref_count_ && --(*ref_count_) == 0)
         {
-            CUDA_CHECK(cudaFree(data_));
+            CUDA_CHECK_NOTHROW(cudaFree(data_));
             delete ref_count_;
         }
 
