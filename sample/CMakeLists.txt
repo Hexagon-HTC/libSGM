@@ -25,6 +25,13 @@ add_executable(stereosgm_benchmark stereosgm_benchmark.cpp ${SRCS_COMMON})
 target_include_directories(stereosgm_benchmark PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(stereosgm_benchmark sgm ${OpenCV_LIBS})
 
+# sample benchmark using dump data (requires BUILD_OPENCV_WRAPPER)
+if(BUILD_OPENCV_WRAPPER)
+	add_executable(stereosgm_benchmark_dump stereosgm_benchmark_dump.cpp ${SRCS_COMMON})
+	target_include_directories(stereosgm_benchmark_dump PRIVATE ${OpenCV_INCLUDE_DIRS})
+	target_link_libraries(stereosgm_benchmark_dump sgm ${OpenCV_LIBS})
+endif()
+
 # sample reprojection
 add_executable(stereosgm_reprojection stereosgm_reprojection.cpp ${SRCS_COMMON})
 target_include_directories(stereosgm_reprojection PRIVATE ${OpenCV_INCLUDE_DIRS})
