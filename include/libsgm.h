@@ -28,6 +28,7 @@ limitations under the License.
  */
 
 #include "libsgm_config.h"
+#include <cstdint>
 
 #if defined(LIBSGM_SHARED)
 #if defined(WIN32) || defined(_WIN32)
@@ -155,6 +156,25 @@ namespace sgm
          * Value of Invalid disparity is equal to return value of `get_invalid_disparity` member function.
          */
         LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst);
+
+        /**
+         * Execute stereo semi global matching with per-pixel disparity ranges (clipped paths).
+         * @param left_pixels               A pointer stored input left image.
+         * @param right_pixels              A pointer stored input right image.
+         * @param dst                       Output pointer. User must allocate enough memory.
+         * @param d_disparity_range_image   Device pointer: (minDisp, maxDisp) per pixel, size H*W*2. Invalid pixels: minDisp > maxDisp.
+         * @param d_disparity_range_offset  Device pointer: cumulative offset into flat cost buffer per pixel, size H*W.
+         * @param disparity_range_length    Total number of cost entries = sum of (maxDisp[i] - minDisp[i] + 1) for all valid pixels.
+         * @param max_per_pixel_range       Widest per-pixel range, must be power of 2 from {16, 32, 64, 128, 256}.
+         */
+        LIBSGM_API void execute(
+            const void *left_pixels,
+            const void *right_pixels,
+            void *dst,
+            const int32_t *d_disparity_range_image,
+            const uint32_t *d_disparity_range_offset,
+            int disparity_range_length,
+            int max_per_pixel_range);
 
         /**
          * Generate invalid disparity value from Parameter::min_disp and Parameter::subpixel

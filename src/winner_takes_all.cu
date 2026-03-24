@@ -17,6 +17,7 @@ limitations under the License.
 #include "internal.h"
 
 #include <cuda_runtime.h>
+#include <cstdint>
 
 #include "device_utility.h"
 #include "host_utility.h"
@@ -216,6 +217,153 @@ namespace sgm
 
     } // namespace
 
+    namespace
+    {
+        // Clipped paths: WTA kernel for per-pixel variable disparity ranges
+        // One thread per pixel, iterates over its disparity range
+        static constexpr unsigned int WTA_CLIPPED_BLOCK_SIZE = 256u;
+
+        template<unsigned int NUM_PATHS>
+        __global__ void winner_takes_all_kernel_clipped(
+            output_type *left_dest,
+            const cost_type *src,
+            int width, int height, int pitch,
+            const int32_t *__restrict__ d_range_image,
+            const uint32_t *__restrict__ d_range_offset,
+            int range_length,
+            float uniqueness,
+            bool subpixel)
+        {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            const int x = idx % width;
+            const int y = idx / width;
+
+            if (y >= height)
+            {
+                return;
+            }
+
+            const int linearIdx = y * width + x;
+            const int minDisp = d_range_image[linearIdx * 2];
+            const int maxDisp = d_range_image[linearIdx * 2 + 1];
+
+            if (minDisp > maxDisp)
+            {
+                left_dest[y * pitch + x] = INVALID_DISP;
+                return;
+            }
+
+            const uint32_t pixelOffset = d_range_offset[linearIdx];
+            const int rangeWidth = maxDisp - minDisp + 1;
+
+            // First pass: accumulate costs and find best disparity
+            uint32_t bestCost = 0xffffffffu;
+            int bestLocalD = 0;
+
+            for (int d = 0; d < rangeWidth; ++d)
+            {
+                uint32_t sum = 0;
+                for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                {
+                    sum += static_cast<uint32_t>(src[p * static_cast<size_t>(range_length) + pixelOffset + d]);
+                }
+                if (sum < bestCost)
+                {
+                    bestCost = sum;
+                    bestLocalD = d;
+                }
+            }
+
+            // Convert to global disparity
+            int bestDisp = minDisp + bestLocalD;
+
+            // Second pass: uniqueness test
+            bool uniq = true;
+            for (int d = 0; d < rangeWidth; ++d)
+            {
+                if (abs(d - bestLocalD) <= 1)
+                    continue;
+                uint32_t sum = 0;
+                for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                {
+                    sum += static_cast<uint32_t>(src[p * static_cast<size_t>(range_length) + pixelOffset + d]);
+                }
+                if (static_cast<float>(sum) * uniqueness < static_cast<float>(bestCost))
+                {
+                    uniq = false;
+                    break;
+                }
+            }
+
+            if (!uniq)
+            {
+                left_dest[y * pitch + x] = INVALID_DISP;
+                return;
+            }
+
+            // Subpixel refinement
+            if (subpixel)
+            {
+                int subp = bestDisp;
+                subp <<= sgm::StereoSGM::SUBPIXEL_SHIFT;
+                if (bestLocalD > 0 && bestLocalD < rangeWidth - 1)
+                {
+                    uint32_t costLeft = 0, costRight = 0;
+                    for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                    {
+                        costLeft += static_cast<uint32_t>(src[p * static_cast<size_t>(range_length) + pixelOffset + bestLocalD - 1]);
+                        costRight += static_cast<uint32_t>(src[p * static_cast<size_t>(range_length) + pixelOffset + bestLocalD + 1]);
+                    }
+                    const int numer = static_cast<int>(costLeft) - static_cast<int>(costRight);
+                    const int denom = static_cast<int>(costLeft) - 2 * static_cast<int>(bestCost) + static_cast<int>(costRight);
+                    if (denom != 0)
+                    {
+                        subp += ((numer << sgm::StereoSGM::SUBPIXEL_SHIFT) + denom) / (2 * denom);
+                    }
+                }
+                left_dest[y * pitch + x] = static_cast<output_type>(subp);
+            }
+            else
+            {
+                left_dest[y * pitch + x] = static_cast<output_type>(bestDisp);
+            }
+        }
+
+        // Scatter kernel for right disparity with clipped paths
+        __global__ void scatter_right_disparity_kernel(
+            const output_type *left_disp,
+            output_type *right_dest,
+            int width, int height, int pitch,
+            bool subpixel)
+        {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            const int x = idx % width;
+            const int y = idx / width;
+
+            if (y >= height)
+            {
+                return;
+            }
+
+            const output_type d = left_disp[y * pitch + x];
+            if (d == INVALID_DISP)
+            {
+                return;
+            }
+
+            // Extract integer disparity for position calculation
+            const int disp_int = subpixel ? (static_cast<int>(d) >> sgm::StereoSGM::SUBPIXEL_SHIFT) : static_cast<int>(d);
+            const int right_x = x - disp_int;
+
+            if (right_x >= 0 && right_x < width)
+            {
+                // Simple scatter - last writer wins
+                right_dest[y * pitch + right_x] = d;
+            }
+        }
+
+    } // namespace (clipped WTA)
+
     namespace details
     {
 
@@ -267,6 +415,46 @@ namespace sgm
             {
                 winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type);
             }
+        }
+
+        void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR,
+                              const int32_t *d_range_image, const uint32_t *d_range_offset,
+                              int max_per_pixel_range,
+                              float uniqueness, bool subpixel, PathType path_type)
+        {
+            const int width = dstL.cols;
+            const int height = dstL.rows;
+            const int pitch = dstL.step;
+
+            const int num_pixels = width * height;
+            const int range_length = src.cols; // cols stores range_length from cost_aggregation
+            const int num_paths = path_type == PathType::SCAN_4PATH ? 4 : 8;
+
+            const cost_type *cost = src.ptr<cost_type>();
+            output_type *dispL = dstL.ptr<output_type>();
+            output_type *dispR = dstR.ptr<output_type>();
+
+            // Initialize right disparity to INVALID_DISP
+            CUDA_CHECK(cudaMemset(dispR, 0xFF, static_cast<size_t>(height) * pitch * sizeof(output_type)));
+
+            const int gdim = divUp(num_pixels, WTA_CLIPPED_BLOCK_SIZE);
+            const int bdim = WTA_CLIPPED_BLOCK_SIZE;
+
+            if (num_paths == 8)
+            {
+                winner_takes_all_kernel_clipped<8><<<gdim, bdim>>>(
+                    dispL, cost, width, height, pitch, d_range_image, d_range_offset, range_length, uniqueness, subpixel);
+            }
+            else
+            {
+                winner_takes_all_kernel_clipped<4><<<gdim, bdim>>>(
+                    dispL, cost, width, height, pitch, d_range_image, d_range_offset, range_length, uniqueness, subpixel);
+            }
+            CUDA_CHECK(cudaGetLastError());
+
+            // Scatter right disparity from left
+            scatter_right_disparity_kernel<<<gdim, bdim>>>(dispL, dispR, width, height, pitch, subpixel);
+            CUDA_CHECK(cudaGetLastError());
         }
 
     } // namespace details

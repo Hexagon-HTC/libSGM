@@ -17,6 +17,7 @@ limitations under the License.
 #include <libsgm.h>
 
 #include <iostream>
+#include <cstdint>
 
 #include "host_utility.h"
 #include "internal.h"
@@ -161,6 +162,84 @@ namespace sgm
             CUDA_CHECK(cudaDeviceSynchronize());
         }
 
+        void execute(const void *srcL, const void *srcR, void *dst,
+                     const int32_t *d_disparity_range_image,
+                     const uint32_t *d_disparity_range_offset,
+                     int disparity_range_length,
+                     int max_per_pixel_range)
+        {
+            SGM_ASSERT(max_per_pixel_range == 16 || max_per_pixel_range == 32 || max_per_pixel_range == 64 ||
+                       max_per_pixel_range == 128 || max_per_pixel_range == 256,
+                       "max_per_pixel_range must be 16, 32, 64, 128 or 256");
+
+            if (is_src_devptr_)
+            {
+                d_srcL_.create((void *)srcL, height_, width_, src_type_, src_pitch_);
+                d_srcR_.create((void *)srcR, height_, width_, src_type_, src_pitch_);
+            }
+            else
+            {
+                d_srcL_.upload(srcL);
+                d_srcR_.upload(srcR);
+            }
+            if (is_dst_devptr_ && dst_type_ == SGM_16U)
+            {
+                d_dispL_.create((void *)dst, height_, width_, SGM_16U, dst_pitch_);
+            }
+
+            // census transform
+            details::census_transform(d_srcL_, d_censusL_, param_.census_type);
+            details::census_transform(d_srcR_, d_censusR_, param_.census_type);
+
+            // cost aggregation with per-pixel ranges
+            details::cost_aggregation(d_censusL_, d_censusR_, d_cost_,
+                                      d_disparity_range_image, d_disparity_range_offset,
+                                      disparity_range_length, max_per_pixel_range,
+                                      param_.P1, param_.P2, param_.path_type);
+
+            // winner-takes-all with per-pixel ranges
+            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_,
+                                      d_disparity_range_image, d_disparity_range_offset,
+                                      max_per_pixel_range,
+                                      param_.uniqueness, param_.subpixel, param_.path_type);
+
+            // post filtering
+            details::median_filter(d_tmpL_, d_dispL_);
+            details::median_filter(d_tmpR_, d_dispR_);
+
+            // consistency check
+            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
+
+            // disparity range correction with per-pixel ranges
+            details::correct_disparity_range(d_dispL_, d_disparity_range_image, param_.subpixel, param_.min_disp);
+
+            if (!is_dst_devptr_ && dst_type_ == SGM_8U)
+            {
+                details::cast_16bit_to_8bit(d_dispL_, d_tmpL_);
+                d_tmpL_.download(dst);
+            }
+            else if (is_dst_devptr_ && dst_type_ == SGM_8U)
+            {
+                DeviceImage d_dst(dst, height_, width_, SGM_8U, dst_pitch_);
+                details::cast_16bit_to_8bit(d_dispL_, d_dst);
+            }
+            else if (!is_dst_devptr_ && dst_type_ == SGM_16U)
+            {
+                d_dispL_.download(dst);
+            }
+            else if (is_dst_devptr_ && dst_type_ == SGM_16U)
+            {
+                // optimize! no-copy!
+            }
+            else
+            {
+                std::cerr << "not impl" << std::endl;
+            }
+
+            // synchronize to ensure all async GPU work is complete and detect any deferred errors
+            CUDA_CHECK(cudaDeviceSynchronize());
+        }
+
         int get_invalid_disparity() const
         {
             return (param_.min_disp - 1) * (param_.subpixel ? SUBPIXEL_SCALE : 1);
@@ -220,6 +299,15 @@ namespace sgm
     void StereoSGM::execute(const void *srcL, const void *srcR, void *dst)
     {
         impl_->execute(srcL, srcR, dst);
+    }
+
+    void StereoSGM::execute(const void *srcL, const void *srcR, void *dst,
+                             const int32_t *d_disparity_range_image,
+                             const uint32_t *d_disparity_range_offset,
+                             int disparity_range_length,
+                             int max_per_pixel_range)
+    {
+        impl_->execute(srcL, srcR, dst, d_disparity_range_image, d_disparity_range_offset, disparity_range_length, max_per_pixel_range);
     }
 
     int StereoSGM::get_invalid_disparity() const

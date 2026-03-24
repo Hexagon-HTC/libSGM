@@ -21,6 +21,7 @@ limitations under the License.
 #include "libsgm.h"
 
 #include <cuda_runtime.h>
+#include <cstdint>
 
 namespace sgm
 {
@@ -31,13 +32,41 @@ namespace sgm
 
         void cost_aggregation(const DeviceImage &srcL, const DeviceImage &srcR, DeviceImage &dst, int disp_size, int P1, int P2, PathType path_type, int min_disp);
 
+        void cost_aggregation(
+            const DeviceImage &srcL,
+            const DeviceImage &srcR,
+            DeviceImage &dst,
+            const int32_t *d_range_image,
+            const uint32_t *d_range_offset,
+            int range_length,
+            int max_per_pixel_range,
+            int P1, int P2,
+            PathType path_type);
+
         void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type);
+
+        void winner_takes_all(
+            const DeviceImage &src,
+            DeviceImage &dstL,
+            DeviceImage &dstR,
+            const int32_t *d_range_image,
+            const uint32_t *d_range_offset,
+            int max_per_pixel_range,
+            float uniqueness,
+            bool subpixel,
+            PathType path_type);
 
         void median_filter(const DeviceImage &src, DeviceImage &dst);
 
         void check_consistency(DeviceImage &dispL, const DeviceImage &dispR, const DeviceImage &srcL, bool subpixel, int LR_max_diff);
 
         void correct_disparity_range(DeviceImage &disp, bool subpixel, int min_disp);
+
+        void correct_disparity_range(
+            DeviceImage &disp,
+            const int32_t *d_range_image,
+            bool subpixel,
+            int min_disp);
 
         void cast_16bit_to_8bit(const DeviceImage &src, DeviceImage &dst);
         void cast_8bit_to_16bit(const DeviceImage &src, DeviceImage &dst);
