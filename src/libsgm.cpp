@@ -138,23 +138,31 @@ namespace sgm
             // cost aggregation
             details::cost_aggregation(d_censusL_, d_censusR_, d_cost_, disp_size_, param_.P1, param_.P2, param_.path_type, param_.min_disp);
 
-            // winner-takes-all
-            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
-
-            // per-pixel range WTA: overwrite left disparity with range-restricted selection
             if (use_per_pixel_range)
             {
+                // per-pixel range WTA: compute left disparity with range restriction (no right disparity)
                 details::winner_takes_all_with_per_pixel_range(d_cost_, d_tmpL_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type, d_minDispsPerPixel_,
                                                                d_maxDispsPerPixel_);
+
+                // post filtering (left only — no right disparity available)
+                details::median_filter(d_tmpL_, d_dispL_);
+
+                // skip L/R consistency check — per-pixel ranges already constrain valid disparities
+                details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
             }
+            else
+            {
+                // standard WTA: compute both left and right disparity
+                details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
 
-            // post filtering
-            details::median_filter(d_tmpL_, d_dispL_);
-            details::median_filter(d_tmpR_, d_dispR_);
+                // post filtering
+                details::median_filter(d_tmpL_, d_dispL_);
+                details::median_filter(d_tmpR_, d_dispR_);
 
-            // consistency check
-            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
-            details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+                // consistency check
+                details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
+                details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+            }
 
             if (!is_dst_devptr_ && dst_type_ == SGM_8U)
             {
