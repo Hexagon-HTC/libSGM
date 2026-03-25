@@ -239,9 +239,10 @@ namespace sgm
             const size_t cost_step = static_cast<size_t>(MAX_DISPARITY) * width * height;
             const size_t pixel_offset = static_cast<size_t>(y) * width * MAX_DISPARITY + static_cast<size_t>(x) * MAX_DISPARITY;
 
-            // Pass 1: Find the best (minimum cost) disparity within per-pixel range.
+            // Single pass: find best disparity and track second-best cost for uniqueness check.
             uint32_t best_cost = 0xFFFFu;
             uint32_t best_disp = min_d;
+            uint32_t second_best_cost = 0xFFFFu;
 
             for (uint32_t d = min_d; d <= max_d; ++d)
             {
@@ -252,31 +253,18 @@ namespace sgm
                 }
                 if (cost_sum < best_cost)
                 {
+                    second_best_cost = best_cost;
                     best_cost = cost_sum;
                     best_disp = d;
                 }
-            }
-
-            // Pass 2: Uniqueness check within valid range.
-            bool unique = true;
-            for (uint32_t d = min_d; d <= max_d && unique; ++d)
-            {
-                if (static_cast<int>(d) >= static_cast<int>(best_disp) - 1 && static_cast<int>(d) <= static_cast<int>(best_disp) + 1)
+                else if (cost_sum < second_best_cost && (static_cast<int>(d) < static_cast<int>(best_disp) - 1 || static_cast<int>(d) > static_cast<int>(best_disp) + 1))
                 {
-                    continue;
-                }
-                uint32_t cost_sum = 0;
-                for (unsigned int p = 0; p < NUM_PATHS; ++p)
-                {
-                    cost_sum += src[p * cost_step + pixel_offset + d];
-                }
-                if (static_cast<float>(cost_sum) * uniqueness < static_cast<float>(best_cost))
-                {
-                    unique = false;
+                    second_best_cost = cost_sum;
                 }
             }
 
-            if (!unique)
+            // Uniqueness: the second-best cost (outside +-1 of best) must satisfy the threshold.
+            if (static_cast<float>(second_best_cost) * uniqueness < static_cast<float>(best_cost))
             {
                 left_dest[y * dst_pitch + x] = INVALID_DISP;
                 return;
