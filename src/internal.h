@@ -33,6 +33,9 @@ namespace sgm
 
         void winner_takes_all(const DeviceImage &src, DeviceImage &dstL, DeviceImage &dstR, int disp_size, float uniqueness, bool subpixel, PathType path_type);
 
+        void winner_takes_all_with_per_pixel_range(const DeviceImage &src, DeviceImage &dstL, int disp_size, float uniqueness, bool subpixel, PathType path_type,
+                                                   const DeviceImage &min_disp_per_pixel, const DeviceImage &max_disp_per_pixel);
+
         void median_filter(const DeviceImage &src, DeviceImage &dst);
 
         void check_consistency(DeviceImage &dispL, const DeviceImage &dispR, const DeviceImage &srcL, bool subpixel, int LR_max_diff);

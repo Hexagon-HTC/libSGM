@@ -214,6 +214,103 @@ namespace sgm
             }
         }
 
+        template<unsigned int MAX_DISPARITY, unsigned int NUM_PATHS>
+        __global__ void winner_takes_all_per_pixel_range_kernel(output_type *left_dest, const cost_type *src, const output_type *min_disps, const output_type *max_disps, int width,
+                                                               int height, int dst_pitch, int min_disp_pitch, float uniqueness, bool subpixel)
+        {
+            const int x = blockIdx.x * blockDim.x + threadIdx.x;
+            const int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+            if (x >= width || y >= height)
+            {
+                return;
+            }
+
+            const output_type min_d = min_disps[y * min_disp_pitch + x];
+            const output_type max_d = max_disps[y * min_disp_pitch + x];
+
+            // Invalid per-pixel range: mark as invalid disparity.
+            if (min_d > max_d || max_d >= MAX_DISPARITY)
+            {
+                left_dest[y * dst_pitch + x] = INVALID_DISP;
+                return;
+            }
+
+            const size_t cost_step = static_cast<size_t>(MAX_DISPARITY) * width * height;
+            const size_t pixel_offset = static_cast<size_t>(y) * width * MAX_DISPARITY + static_cast<size_t>(x) * MAX_DISPARITY;
+
+            // Pass 1: Find the best (minimum cost) disparity within per-pixel range.
+            uint32_t best_cost = 0xFFFFu;
+            uint32_t best_disp = min_d;
+
+            for (uint32_t d = min_d; d <= max_d; ++d)
+            {
+                uint32_t cost_sum = 0;
+                for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                {
+                    cost_sum += src[p * cost_step + pixel_offset + d];
+                }
+                if (cost_sum < best_cost)
+                {
+                    best_cost = cost_sum;
+                    best_disp = d;
+                }
+            }
+
+            // Pass 2: Uniqueness check within valid range.
+            bool unique = true;
+            for (uint32_t d = min_d; d <= max_d && unique; ++d)
+            {
+                if (static_cast<int>(d) >= static_cast<int>(best_disp) - 1 && static_cast<int>(d) <= static_cast<int>(best_disp) + 1)
+                {
+                    continue;
+                }
+                uint32_t cost_sum = 0;
+                for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                {
+                    cost_sum += src[p * cost_step + pixel_offset + d];
+                }
+                if (static_cast<float>(cost_sum) * uniqueness < static_cast<float>(best_cost))
+                {
+                    unique = false;
+                }
+            }
+
+            if (!unique)
+            {
+                left_dest[y * dst_pitch + x] = INVALID_DISP;
+                return;
+            }
+
+            // Subpixel refinement using parabolic fitting on the full cost volume.
+            if (subpixel && best_disp > 0 && best_disp < MAX_DISPARITY - 1)
+            {
+                uint32_t cost_left = 0;
+                uint32_t cost_right = 0;
+                for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                {
+                    cost_left += src[p * cost_step + pixel_offset + best_disp - 1];
+                    cost_right += src[p * cost_step + pixel_offset + best_disp + 1];
+                }
+                int subp = static_cast<int>(best_disp) << StereoSGM::SUBPIXEL_SHIFT;
+                const int numer = static_cast<int>(cost_left) - static_cast<int>(cost_right);
+                const int denom = static_cast<int>(cost_left) - 2 * static_cast<int>(best_cost) + static_cast<int>(cost_right);
+                if (denom != 0)
+                {
+                    subp += ((numer << StereoSGM::SUBPIXEL_SHIFT) + denom) / (2 * denom);
+                }
+                left_dest[y * dst_pitch + x] = static_cast<output_type>(subp);
+            }
+            else if (subpixel)
+            {
+                left_dest[y * dst_pitch + x] = static_cast<output_type>(static_cast<int>(best_disp) << StereoSGM::SUBPIXEL_SHIFT);
+            }
+            else
+            {
+                left_dest[y * dst_pitch + x] = static_cast<output_type>(best_disp);
+            }
+        }
+
     } // namespace
 
     namespace details
@@ -266,6 +363,53 @@ namespace sgm
             else if (disp_size == 256)
             {
                 winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type);
+            }
+        }
+
+        template<int MAX_DISPARITY>
+        void winner_takes_all_with_per_pixel_range_(const DeviceImage &src, DeviceImage &dstL, float uniqueness, bool subpixel, PathType path_type, const DeviceImage &minDisps,
+                                                    const DeviceImage &maxDisps)
+        {
+            const int width = dstL.cols;
+            const int height = dstL.rows;
+            const int dst_pitch = dstL.step;
+            const int range_pitch = minDisps.step;
+
+            constexpr int BLOCK_X = 16;
+            constexpr int BLOCK_Y = 16;
+            const dim3 bdim(BLOCK_X, BLOCK_Y);
+            const dim3 gdim(divUp(width, BLOCK_X), divUp(height, BLOCK_Y));
+
+            if (path_type == PathType::SCAN_8PATH)
+            {
+                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 8>
+                    <<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(), maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch,
+                                     uniqueness, subpixel);
+            }
+            else
+            {
+                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 4>
+                    <<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(), maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch,
+                                     uniqueness, subpixel);
+            }
+
+            CUDA_CHECK(cudaGetLastError());
+        }
+
+        void winner_takes_all_with_per_pixel_range(const DeviceImage &src, DeviceImage &dstL, int disp_size, float uniqueness, bool subpixel, PathType path_type,
+                                                   const DeviceImage &min_disp_per_pixel, const DeviceImage &max_disp_per_pixel)
+        {
+            if (disp_size == 64)
+            {
+                winner_takes_all_with_per_pixel_range_<64>(src, dstL, uniqueness, subpixel, path_type, min_disp_per_pixel, max_disp_per_pixel);
+            }
+            else if (disp_size == 128)
+            {
+                winner_takes_all_with_per_pixel_range_<128>(src, dstL, uniqueness, subpixel, path_type, min_disp_per_pixel, max_disp_per_pixel);
+            }
+            else if (disp_size == 256)
+            {
+                winner_takes_all_with_per_pixel_range_<256>(src, dstL, uniqueness, subpixel, path_type, min_disp_per_pixel, max_disp_per_pixel);
             }
         }
 

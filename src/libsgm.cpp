@@ -96,9 +96,24 @@ namespace sgm
                 d_dispL_.create(height, width, SGM_16U, dst_pitch);
             }
             d_dispR_.create(height, width, SGM_16U, dst_pitch);
+
+            d_minDispsPerPixel_.create(height, width, SGM_16U);
+            d_maxDispsPerPixel_.create(height, width, SGM_16U);
         }
 
         void execute(const void *srcL, const void *srcR, void *dst)
+        {
+            execute_internal(srcL, srcR, dst, false);
+        }
+
+        void execute(const void *srcL, const void *srcR, void *dst, const uint16_t *min_disp_per_pixel, const uint16_t *max_disp_per_pixel)
+        {
+            d_minDispsPerPixel_.upload(min_disp_per_pixel);
+            d_maxDispsPerPixel_.upload(max_disp_per_pixel);
+            execute_internal(srcL, srcR, dst, true);
+        }
+
+        void execute_internal(const void *srcL, const void *srcR, void *dst, bool use_per_pixel_range)
         {
             if (is_src_devptr_)
             {
@@ -125,6 +140,13 @@ namespace sgm
 
             // winner-takes-all
             details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
+
+            // per-pixel range WTA: overwrite left disparity with range-restricted selection
+            if (use_per_pixel_range)
+            {
+                details::winner_takes_all_with_per_pixel_range(d_cost_, d_tmpL_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type, d_minDispsPerPixel_,
+                                                               d_maxDispsPerPixel_);
+            }
 
             // post filtering
             details::median_filter(d_tmpL_, d_dispL_);
@@ -188,6 +210,8 @@ namespace sgm
         DeviceImage d_tmpR_;
         DeviceImage d_dispL_;
         DeviceImage d_dispR_;
+        DeviceImage d_minDispsPerPixel_;
+        DeviceImage d_maxDispsPerPixel_;
     };
 
     StereoSGM::Parameters::Parameters(int P1, int P2, float uniqueness, bool subpixel, PathType path_type, int min_disp, int LR_max_diff, CensusType census_type) :
@@ -220,6 +244,11 @@ namespace sgm
     void StereoSGM::execute(const void *srcL, const void *srcR, void *dst)
     {
         impl_->execute(srcL, srcR, dst);
+    }
+
+    void StereoSGM::execute(const void *srcL, const void *srcR, void *dst, const uint16_t *min_disp_per_pixel, const uint16_t *max_disp_per_pixel)
+    {
+        impl_->execute(srcL, srcR, dst, min_disp_per_pixel, max_disp_per_pixel);
     }
 
     int StereoSGM::get_invalid_disparity() const
