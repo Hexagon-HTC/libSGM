@@ -214,14 +214,24 @@ namespace sgm
             }
         }
 
+        // Warp-cooperative per-pixel range kernel: 1 warp (32 threads) per pixel.
+        // All threads loop over the full MAX_DISPARITY range with coalesced reads,
+        // masking out-of-range disparities. Warp-level reduction finds the best match.
         template<unsigned int MAX_DISPARITY, unsigned int NUM_PATHS>
         __global__ void winner_takes_all_per_pixel_range_kernel(output_type *left_dest, const cost_type *src, const output_type *min_disps, const output_type *max_disps, int width,
                                                                int height, int dst_pitch, int min_disp_pitch, float uniqueness, bool subpixel)
         {
-            const int x = blockIdx.x * blockDim.x + threadIdx.x;
-            const int y = blockIdx.y * blockDim.y + threadIdx.y;
+            static const unsigned int REDUCTION_PER_THREAD = MAX_DISPARITY / WARP_SIZE;
 
-            if (x >= width || y >= height)
+            const unsigned int warp_id = threadIdx.x / WARP_SIZE;
+            const unsigned int lane_id = threadIdx.x % WARP_SIZE;
+
+            // Each warp processes one pixel (linear index)
+            const unsigned int pixel_idx = blockIdx.x * WARPS_PER_BLOCK + warp_id;
+            const int y = pixel_idx / width;
+            const int x = pixel_idx % width;
+
+            if (y >= height)
             {
                 return;
             }
@@ -232,70 +242,101 @@ namespace sgm
             // Invalid per-pixel range: mark as invalid disparity.
             if (min_d > max_d || max_d >= MAX_DISPARITY)
             {
-                left_dest[y * dst_pitch + x] = INVALID_DISP;
+                if (lane_id == 0)
+                {
+                    left_dest[y * dst_pitch + x] = INVALID_DISP;
+                }
                 return;
             }
 
             const size_t cost_step = static_cast<size_t>(MAX_DISPARITY) * width * height;
             const size_t pixel_offset = static_cast<size_t>(y) * width * MAX_DISPARITY + static_cast<size_t>(x) * MAX_DISPARITY;
 
-            // Single pass: find best disparity and track second-best cost for uniqueness check.
-            uint32_t best_cost = 0xFFFFu;
-            uint32_t best_disp = min_d;
-            uint32_t second_best_cost = 0xFFFFu;
-
-            for (uint32_t d = min_d; d <= max_d; ++d)
+            // Each thread accumulates costs for REDUCTION_PER_THREAD contiguous disparities.
+            // 32 threads cover the full MAX_DISPARITY range with coalesced global memory reads.
+            const unsigned int k0 = lane_id * REDUCTION_PER_THREAD;
+            uint32_t local_cost_sum[REDUCTION_PER_THREAD];
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
             {
-                uint32_t cost_sum = 0;
-                for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                local_cost_sum[i] = 0;
+            }
+
+            for (unsigned int p = 0; p < NUM_PATHS; ++p)
+            {
+                uint32_t load_buffer[REDUCTION_PER_THREAD];
+                load_uint8_vector<REDUCTION_PER_THREAD>(load_buffer, &src[p * cost_step + pixel_offset + k0]);
+                for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
                 {
-                    cost_sum += src[p * cost_step + pixel_offset + d];
-                }
-                if (cost_sum < best_cost)
-                {
-                    second_best_cost = best_cost;
-                    best_cost = cost_sum;
-                    best_disp = d;
-                }
-                else if (cost_sum < second_best_cost && (static_cast<int>(d) < static_cast<int>(best_disp) - 1 || static_cast<int>(d) > static_cast<int>(best_disp) + 1))
-                {
-                    second_best_cost = cost_sum;
+                    local_cost_sum[i] += load_buffer[i];
                 }
             }
 
-            // Uniqueness: the second-best cost (outside +-1 of best) must satisfy the threshold.
-            if (static_cast<float>(second_best_cost) * uniqueness < static_cast<float>(best_cost))
+            // Pack cost+index, masking out-of-range disparities to maximum cost
+            uint32_t local_packed[REDUCTION_PER_THREAD];
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
             {
-                left_dest[y * dst_pitch + x] = INVALID_DISP;
-                return;
+                const unsigned int d = k0 + i;
+                const uint32_t cost = (d < min_d || d > max_d) ? 0xFFFFu : local_cost_sum[i];
+                local_packed[i] = pack_cost_index(cost, d);
             }
 
-            // Subpixel refinement using parabolic fitting on the full cost volume.
-            if (subpixel && best_disp > 0 && best_disp < MAX_DISPARITY - 1)
+            // Warp-level reduction: find best disparity
+            uint32_t best = 0xFFFFFFFFu;
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
             {
-                uint32_t cost_left = 0;
-                uint32_t cost_right = 0;
-                for (unsigned int p = 0; p < NUM_PATHS; ++p)
-                {
-                    cost_left += src[p * cost_step + pixel_offset + best_disp - 1];
-                    cost_right += src[p * cost_step + pixel_offset + best_disp + 1];
-                }
-                int subp = static_cast<int>(best_disp) << StereoSGM::SUBPIXEL_SHIFT;
+                best = min(best, local_packed[i]);
+            }
+            best = subgroup_min<WARP_SIZE>(best, 0xFFFFFFFFu);
+
+            const uint32_t bestCost = unpack_cost(best);
+            const int bestDisp = unpack_index(best);
+
+            // Uniqueness check (warp-cooperative)
+            bool uniq = true;
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
+            {
+                const uint32_t val = local_packed[i];
+                const bool cost_ok = unpack_cost(val) * uniqueness >= bestCost;
+                const bool neighbor = abs(unpack_index(val) - bestDisp) <= 1;
+                uniq &= cost_ok || neighbor;
+            }
+            uniq = subgroup_and<WARP_SIZE>(uniq, 0xFFFFFFFFu);
+
+            // Subpixel: retrieve neighbor costs via warp shuffles.
+            // All conditions are warp-uniform so all threads take the same branch.
+            int result_disp = bestDisp;
+            if (subpixel && uniq && bestDisp > 0 && bestDisp < static_cast<int>(MAX_DISPARITY) - 1)
+            {
+                const unsigned int left_lane = (bestDisp - 1) / REDUCTION_PER_THREAD;
+                const unsigned int left_idx = (bestDisp - 1) % REDUCTION_PER_THREAD;
+                const unsigned int right_lane = (bestDisp + 1) / REDUCTION_PER_THREAD;
+                const unsigned int right_idx = (bestDisp + 1) % REDUCTION_PER_THREAD;
+
+#if CUDA_VERSION >= 9000
+                const uint32_t cost_left = __shfl_sync(0xFFFFFFFFu, local_cost_sum[left_idx], left_lane);
+                const uint32_t cost_right = __shfl_sync(0xFFFFFFFFu, local_cost_sum[right_idx], right_lane);
+#else
+                const uint32_t cost_left = __shfl(local_cost_sum[left_idx], left_lane);
+                const uint32_t cost_right = __shfl(local_cost_sum[right_idx], right_lane);
+#endif
+
+                int subp = bestDisp << StereoSGM::SUBPIXEL_SHIFT;
                 const int numer = static_cast<int>(cost_left) - static_cast<int>(cost_right);
-                const int denom = static_cast<int>(cost_left) - 2 * static_cast<int>(best_cost) + static_cast<int>(cost_right);
+                const int denom = static_cast<int>(cost_left) - 2 * static_cast<int>(bestCost) + static_cast<int>(cost_right);
                 if (denom != 0)
                 {
                     subp += ((numer << StereoSGM::SUBPIXEL_SHIFT) + denom) / (2 * denom);
                 }
-                left_dest[y * dst_pitch + x] = static_cast<output_type>(subp);
+                result_disp = subp;
             }
-            else if (subpixel)
+            else if (subpixel && uniq)
             {
-                left_dest[y * dst_pitch + x] = static_cast<output_type>(static_cast<int>(best_disp) << StereoSGM::SUBPIXEL_SHIFT);
+                result_disp = bestDisp << StereoSGM::SUBPIXEL_SHIFT;
             }
-            else
+
+            if (lane_id == 0)
             {
-                left_dest[y * dst_pitch + x] = static_cast<output_type>(best_disp);
+                left_dest[y * dst_pitch + x] = uniq ? static_cast<output_type>(result_disp) : INVALID_DISP;
             }
         }
 
@@ -363,10 +404,10 @@ namespace sgm
             const int dst_pitch = dstL.step;
             const int range_pitch = minDisps.step;
 
-            constexpr int BLOCK_X = 16;
-            constexpr int BLOCK_Y = 16;
-            const dim3 bdim(BLOCK_X, BLOCK_Y);
-            const dim3 gdim(divUp(width, BLOCK_X), divUp(height, BLOCK_Y));
+            // 1 warp per pixel, WARPS_PER_BLOCK warps per block
+            const int total_pixels = width * height;
+            const int gdim = divUp(total_pixels, WARPS_PER_BLOCK);
+            const int bdim = BLOCK_SIZE;
 
             if (path_type == PathType::SCAN_8PATH)
             {
