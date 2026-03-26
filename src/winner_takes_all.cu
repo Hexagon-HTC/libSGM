@@ -109,6 +109,7 @@ namespace sgm
 #pragma unroll
                 for (unsigned int x1 = 0; x1 < UNROLL_DEPTH; ++x1)
                 {
+                    // Loading phase is triggered every ACCUMULATION_INTERVAL.
                     if (x1 % ACCUMULATION_INTERVAL == 0)
                     {
                         const unsigned int k = lane_id * ACCUMULATION_PER_THREAD;
@@ -148,7 +149,7 @@ namespace sgm
                         const unsigned int k0 = lane_id * REDUCTION_PER_THREAD;
                         uint32_t local_cost_sum[REDUCTION_PER_THREAD];
                         load_uint16_vector<REDUCTION_PER_THREAD>(local_cost_sum, &smem_cost_sum[warp_id][smem_x][k0]);
-                        // Pack sum of costs and dispairty
+                        // Pack sum of costs and disparity
                         uint32_t local_packed_cost[REDUCTION_PER_THREAD];
                         for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
                         {
@@ -214,19 +215,67 @@ namespace sgm
             }
         }
 
-        // Warp-cooperative per-pixel range kernel: 1 warp (32 threads) per pixel.
-        // All threads loop over the full MAX_DISPARITY range with coalesced reads,
-        // masking out-of-range disparities. Warp-level reduction finds the best match.
+        // Block-cooperative per-pixel range kernel: 1 warp (32 threads) per pixel.
+        // All BLOCK_SIZE threads cooperatively load cost data for WARPS_PER_BLOCK pixels
+        // using wide 128-bit vectorized reads into shared memory, then each warp processes
+        // its pixel's costs from shared memory. Subpixel reads neighbors directly from smem.
         template<unsigned int MAX_DISPARITY, unsigned int NUM_PATHS>
         __global__ void winner_takes_all_per_pixel_range_kernel(output_type *left_dest, const cost_type *src, const output_type *min_disps, const output_type *max_disps, int width,
                                                                int height, int dst_pitch, int min_disp_pitch, float uniqueness, bool subpixel)
         {
             static const unsigned int REDUCTION_PER_THREAD = MAX_DISPARITY / WARP_SIZE;
+            static const unsigned int ACCUMULATION_PER_THREAD = 16u;
+            static const unsigned int LOAD_THREADS = (WARPS_PER_BLOCK * MAX_DISPARITY) / ACCUMULATION_PER_THREAD;
 
-            const unsigned int warp_id = threadIdx.x / WARP_SIZE;
-            const unsigned int lane_id = threadIdx.x % WARP_SIZE;
+            const unsigned int tid = threadIdx.x;
+            const unsigned int warp_id = tid / WARP_SIZE;
+            const unsigned int lane_id = tid % WARP_SIZE;
 
-            // Each warp processes one pixel (linear index)
+            const size_t cost_step = static_cast<size_t>(MAX_DISPARITY) * width * height;
+            const int total_pixels = width * height;
+
+            // Shared memory for accumulated cost sums of all pixels in the block
+            __shared__ uint16_t smem_cost_sum[WARPS_PER_BLOCK][MAX_DISPARITY];
+
+            // === Block-cooperative loading phase ===
+            // LOAD_THREADS threads load ACCUMULATION_PER_THREAD (16) bytes each using
+            // 128-bit vectorized reads, accumulate across NUM_PATHS path planes, and
+            // store uint16 sums to shared memory. All threads must reach __syncthreads().
+            {
+                const size_t block_base = static_cast<size_t>(blockIdx.x) * WARPS_PER_BLOCK * MAX_DISPARITY;
+
+                if (tid < LOAD_THREADS)
+                {
+                    const unsigned int flat = tid * ACCUMULATION_PER_THREAD;
+                    const unsigned int pix_in_block = flat / MAX_DISPARITY;
+                    const int linear_pixel = static_cast<int>(blockIdx.x * WARPS_PER_BLOCK + pix_in_block);
+
+                    if (linear_pixel < total_pixels)
+                    {
+                        const unsigned int disp_offset = flat % MAX_DISPARITY;
+                        uint32_t sum[ACCUMULATION_PER_THREAD];
+#pragma unroll
+                        for (unsigned int i = 0; i < ACCUMULATION_PER_THREAD; ++i)
+                        {
+                            sum[i] = 0;
+                        }
+                        for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                        {
+                            uint32_t buf[ACCUMULATION_PER_THREAD];
+                            load_uint8_vector<ACCUMULATION_PER_THREAD>(buf, &src[p * cost_step + block_base + flat]);
+#pragma unroll
+                            for (unsigned int i = 0; i < ACCUMULATION_PER_THREAD; ++i)
+                            {
+                                sum[i] += buf[i];
+                            }
+                        }
+                        store_uint16_vector<ACCUMULATION_PER_THREAD>(&smem_cost_sum[pix_in_block][disp_offset], sum);
+                    }
+                }
+            }
+            __syncthreads();
+
+            // === Per-warp pixel processing ===
             const unsigned int pixel_idx = blockIdx.x * WARPS_PER_BLOCK + warp_id;
             const int y = pixel_idx / width;
             const int x = pixel_idx % width;
@@ -249,30 +298,14 @@ namespace sgm
                 return;
             }
 
-            const size_t cost_step = static_cast<size_t>(MAX_DISPARITY) * width * height;
-            const size_t pixel_offset = static_cast<size_t>(y) * width * MAX_DISPARITY + static_cast<size_t>(x) * MAX_DISPARITY;
-
-            // Each thread accumulates costs for REDUCTION_PER_THREAD contiguous disparities.
-            // 32 threads cover the full MAX_DISPARITY range with coalesced global memory reads.
+            // Read accumulated costs from shared memory
             const unsigned int k0 = lane_id * REDUCTION_PER_THREAD;
             uint32_t local_cost_sum[REDUCTION_PER_THREAD];
-            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
-            {
-                local_cost_sum[i] = 0;
-            }
-
-            for (unsigned int p = 0; p < NUM_PATHS; ++p)
-            {
-                uint32_t load_buffer[REDUCTION_PER_THREAD];
-                load_uint8_vector<REDUCTION_PER_THREAD>(load_buffer, &src[p * cost_step + pixel_offset + k0]);
-                for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
-                {
-                    local_cost_sum[i] += load_buffer[i];
-                }
-            }
+            load_uint16_vector<REDUCTION_PER_THREAD>(local_cost_sum, &smem_cost_sum[warp_id][k0]);
 
             // Pack cost+index, masking out-of-range disparities to maximum cost
             uint32_t local_packed[REDUCTION_PER_THREAD];
+#pragma unroll
             for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
             {
                 const unsigned int d = k0 + i;
@@ -282,6 +315,7 @@ namespace sgm
 
             // Warp-level reduction: find best disparity
             uint32_t best = 0xFFFFFFFFu;
+#pragma unroll
             for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
             {
                 best = min(best, local_packed[i]);
@@ -293,6 +327,7 @@ namespace sgm
 
             // Uniqueness check (warp-cooperative)
             bool uniq = true;
+#pragma unroll
             for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
             {
                 const uint32_t val = local_packed[i];
@@ -302,27 +337,16 @@ namespace sgm
             }
             uniq = subgroup_and<WARP_SIZE>(uniq, 0xFFFFFFFFu);
 
-            // Subpixel: retrieve neighbor costs via warp shuffles.
-            // All conditions are warp-uniform so all threads take the same branch.
+            // Subpixel: read neighbor costs directly from shared memory (bestDisp is warp-uniform).
             int result_disp = bestDisp;
             if (subpixel && uniq && bestDisp > 0 && bestDisp < static_cast<int>(MAX_DISPARITY) - 1)
             {
-                const unsigned int left_lane = (bestDisp - 1) / REDUCTION_PER_THREAD;
-                const unsigned int left_idx = (bestDisp - 1) % REDUCTION_PER_THREAD;
-                const unsigned int right_lane = (bestDisp + 1) / REDUCTION_PER_THREAD;
-                const unsigned int right_idx = (bestDisp + 1) % REDUCTION_PER_THREAD;
-
-#if CUDA_VERSION >= 9000
-                const uint32_t cost_left = __shfl_sync(0xFFFFFFFFu, local_cost_sum[left_idx], left_lane);
-                const uint32_t cost_right = __shfl_sync(0xFFFFFFFFu, local_cost_sum[right_idx], right_lane);
-#else
-                const uint32_t cost_left = __shfl(local_cost_sum[left_idx], left_lane);
-                const uint32_t cost_right = __shfl(local_cost_sum[right_idx], right_lane);
-#endif
+                const int cost_left = smem_cost_sum[warp_id][bestDisp - 1];
+                const int cost_right = smem_cost_sum[warp_id][bestDisp + 1];
 
                 int subp = bestDisp << StereoSGM::SUBPIXEL_SHIFT;
-                const int numer = static_cast<int>(cost_left) - static_cast<int>(cost_right);
-                const int denom = static_cast<int>(cost_left) - 2 * static_cast<int>(bestCost) + static_cast<int>(cost_right);
+                const int numer = cost_left - cost_right;
+                const int denom = cost_left - 2 * static_cast<int>(bestCost) + cost_right;
                 if (denom != 0)
                 {
                     subp += ((numer << StereoSGM::SUBPIXEL_SHIFT) + denom) / (2 * denom);
