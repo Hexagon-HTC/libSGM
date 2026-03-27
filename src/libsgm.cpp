@@ -191,6 +191,66 @@ namespace sgm
             CUDA_CHECK(cudaDeviceSynchronize());
         }
 
+        void reconfigure(int width, int height, int disparity_size, int src_depth, int dst_depth, int src_pitch, int dst_pitch, ExecuteInOut inout_type, const Parameters &param)
+        {
+            SGM_ASSERT(src_depth == 8 || src_depth == 16 || src_depth == 32, "src depth bits must be 8, 16 or 32");
+            SGM_ASSERT(dst_depth == 8 || dst_depth == 16, "dst depth bits must be 8 or 16");
+            SGM_ASSERT(disparity_size == 64 || disparity_size == 128 || disparity_size == 256, "disparity size must be 64 or 128 or 256");
+            SGM_ASSERT(has_enough_depth(dst_depth, disparity_size, param.min_disp, param.subpixel), "output depth bits must be sufficient for representing output value");
+
+            width_ = width;
+            height_ = height;
+            disp_size_ = disparity_size;
+            src_pitch_ = src_pitch;
+            dst_pitch_ = dst_pitch;
+            param_ = param;
+
+            src_type_ = src_depth == 8 ? SGM_8U : src_depth == 16 ? SGM_16U : SGM_32U;
+            dst_type_ = dst_depth == 8 ? SGM_8U : SGM_16U;
+
+            is_src_devptr_ = (inout_type & 0x01) > 0;
+            is_dst_devptr_ = (inout_type & 0x02) > 0;
+
+            if (!is_src_devptr_)
+            {
+                d_srcL_.create(height, width, src_type_, src_pitch);
+                d_srcR_.create(height, width, src_type_, src_pitch);
+            }
+
+            const ImageType census_type = param.census_type == CensusType::CENSUS_9x7 ? SGM_64U : SGM_32U;
+            d_censusL_.create(height, width, census_type);
+            d_censusR_.create(height, width, census_type);
+            d_censusL_.fill_zero();
+            d_censusR_.fill_zero();
+
+            d_tmpL_.create(height, width, SGM_16U, dst_pitch);
+            d_tmpR_.create(height, width, SGM_16U, dst_pitch);
+
+            if (!(is_dst_devptr_ && dst_type_ == SGM_16U))
+            {
+                d_dispL_.create(height, width, SGM_16U, dst_pitch);
+            }
+            d_dispR_.create(height, width, SGM_16U, dst_pitch);
+
+            d_minDispsPerPixel_.create(height, width, SGM_16U);
+            d_maxDispsPerPixel_.create(height, width, SGM_16U);
+        }
+
+        void release_memory()
+        {
+            d_srcL_.release();
+            d_srcR_.release();
+            d_censusL_.release();
+            d_censusR_.release();
+            d_cost_.release();
+            d_tmpL_.release();
+            d_tmpR_.release();
+            d_dispL_.release();
+            d_dispR_.release();
+            d_minDispsPerPixel_.release();
+            d_maxDispsPerPixel_.release();
+        }
+
         int get_invalid_disparity() const
         {
             return (param_.min_disp - 1) * (param_.subpixel ? SUBPIXEL_SCALE : 1);
@@ -262,6 +322,22 @@ namespace sgm
     int StereoSGM::get_invalid_disparity() const
     {
         return impl_->get_invalid_disparity();
+    }
+
+    void StereoSGM::reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, ExecuteInOut inout_type, const Parameters &param)
+    {
+        impl_->reconfigure(width, height, disparity_size, input_depth_bits, output_depth_bits, width, width, inout_type, param);
+    }
+
+    void StereoSGM::reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, int src_pitch, int dst_pitch, ExecuteInOut inout_type,
+                                const Parameters &param)
+    {
+        impl_->reconfigure(width, height, disparity_size, input_depth_bits, output_depth_bits, src_pitch, dst_pitch, inout_type, param);
+    }
+
+    void StereoSGM::release_memory()
+    {
+        impl_->release_memory();
     }
 
 } // namespace sgm

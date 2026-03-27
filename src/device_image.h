@@ -42,6 +42,8 @@ namespace sgm
         void create(int rows, int cols, ImageType type, int step = -1);
         void create(void *data, int rows, int cols, ImageType type, int step = -1);
 
+        void release();
+
         void upload(const void *data, cudaStream_t stream = 0);
         void download(void *data, cudaStream_t stream = 0) const;
         void fill_zero(cudaStream_t stream = 0);

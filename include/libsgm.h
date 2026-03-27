@@ -182,6 +182,34 @@ namespace sgm
          */
         LIBSGM_API int get_invalid_disparity() const;
 
+        /**
+         * Reconfigure the StereoSGM instance for new image dimensions, disparity size, or parameters.
+         * GPU memory buffers are reused when the new size fits within the previously allocated capacity (grow-only).
+         * @param width Processed image's width.
+         * @param height Processed image's height.
+         * @param disparity_size It must be 64, 128 or 256.
+         * @param input_depth_bits Processed image's bits per pixel. It must be 8, 16 or 32.
+         * @param output_depth_bits Disparity image's bits per pixel. It must be 8 or 16.
+         * @param inout_type Specify input/output pointer type.
+         * @param param Algorithm parameters.
+         */
+        LIBSGM_API void reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, ExecuteInOut inout_type,
+                                    const Parameters &param = Parameters());
+
+        /**
+         * Reconfigure with explicit source and destination pitch.
+         * @param src_pitch Source image's pitch (pixels).
+         * @param dst_pitch Destination image's pitch (pixels).
+         */
+        LIBSGM_API void reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, int src_pitch, int dst_pitch,
+                                    ExecuteInOut inout_type, const Parameters &param = Parameters());
+
+        /**
+         * Release all GPU memory held by this instance.
+         * The object remains valid — call reconfigure() before the next execute().
+         */
+        LIBSGM_API void release_memory();
+
     private:
         StereoSGM(const StereoSGM &);
         StereoSGM &operator=(const StereoSGM &);

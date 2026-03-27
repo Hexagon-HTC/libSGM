@@ -75,6 +75,15 @@ namespace sgm
         type = _type;
     }
 
+    void DeviceImage::release()
+    {
+        allocator_.release();
+        data = nullptr;
+        rows = 0;
+        cols = 0;
+        step = 0;
+    }
+
     void DeviceImage::upload(const void *_data, cudaStream_t stream)
     {
         CUDA_CHECK(cudaMemcpyAsync(data, _data, elemSize(type) * rows * step, cudaMemcpyHostToDevice, stream));
