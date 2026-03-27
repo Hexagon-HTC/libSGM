@@ -50,7 +50,7 @@ namespace sgm
             CUDA_CHECK(cudaMalloc(&data_, size));
             if (data_ == nullptr)
             {
-                throw std::runtime_error("cudaMalloc returned nullptr");
+                throw std::runtime_error("Couldn't allocate memory on GPU.");
             }
             ref_count_ = new int(1);
             capacity_ = size;
