@@ -96,9 +96,24 @@ namespace sgm
                 d_dispL_.create(height, width, SGM_16U, dst_pitch);
             }
             d_dispR_.create(height, width, SGM_16U, dst_pitch);
+
+            d_minDispsPerPixel_.create(height, width, SGM_16U);
+            d_maxDispsPerPixel_.create(height, width, SGM_16U);
         }
 
         void execute(const void *srcL, const void *srcR, void *dst)
+        {
+            execute_internal(srcL, srcR, dst, false);
+        }
+
+        void execute(const void *srcL, const void *srcR, void *dst, const uint16_t *min_disp_per_pixel, const uint16_t *max_disp_per_pixel)
+        {
+            d_minDispsPerPixel_.upload(min_disp_per_pixel);
+            d_maxDispsPerPixel_.upload(max_disp_per_pixel);
+            execute_internal(srcL, srcR, dst, true);
+        }
+
+        void execute_internal(const void *srcL, const void *srcR, void *dst, bool use_per_pixel_range)
         {
             if (is_src_devptr_)
             {
@@ -123,16 +138,31 @@ namespace sgm
             // cost aggregation
             details::cost_aggregation(d_censusL_, d_censusR_, d_cost_, disp_size_, param_.P1, param_.P2, param_.path_type, param_.min_disp);
 
-            // winner-takes-all
-            details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
+            if (use_per_pixel_range)
+            {
+                // per-pixel range WTA: compute left disparity with range restriction (no right disparity)
+                details::winner_takes_all_with_per_pixel_range(d_cost_, d_tmpL_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type, d_minDispsPerPixel_,
+                                                               d_maxDispsPerPixel_);
 
-            // post filtering
-            details::median_filter(d_tmpL_, d_dispL_);
-            details::median_filter(d_tmpR_, d_dispR_);
+                // post filtering (left only — no right disparity available)
+                details::median_filter(d_tmpL_, d_dispL_);
 
-            // consistency check
-            details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
-            details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+                // skip L/R consistency check — per-pixel ranges already constrain valid disparities
+                details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+            }
+            else
+            {
+                // standard WTA: compute both left and right disparity
+                details::winner_takes_all(d_cost_, d_tmpL_, d_tmpR_, disp_size_, param_.uniqueness, param_.subpixel, param_.path_type);
+
+                // post filtering
+                details::median_filter(d_tmpL_, d_dispL_);
+                details::median_filter(d_tmpR_, d_dispR_);
+
+                // consistency check
+                details::check_consistency(d_dispL_, d_dispR_, d_srcL_, param_.subpixel, param_.LR_max_diff);
+                details::correct_disparity_range(d_dispL_, param_.subpixel, param_.min_disp);
+            }
 
             if (!is_dst_devptr_ && dst_type_ == SGM_8U)
             {
@@ -159,6 +189,66 @@ namespace sgm
 
             // synchronize to ensure all async GPU work is complete and detect any deferred errors
             CUDA_CHECK(cudaDeviceSynchronize());
+        }
+
+        void reconfigure(int width, int height, int disparity_size, int src_depth, int dst_depth, int src_pitch, int dst_pitch, ExecuteInOut inout_type, const Parameters &param)
+        {
+            SGM_ASSERT(src_depth == 8 || src_depth == 16 || src_depth == 32, "src depth bits must be 8, 16 or 32");
+            SGM_ASSERT(dst_depth == 8 || dst_depth == 16, "dst depth bits must be 8 or 16");
+            SGM_ASSERT(disparity_size == 64 || disparity_size == 128 || disparity_size == 256, "disparity size must be 64 or 128 or 256");
+            SGM_ASSERT(has_enough_depth(dst_depth, disparity_size, param.min_disp, param.subpixel), "output depth bits must be sufficient for representing output value");
+
+            width_ = width;
+            height_ = height;
+            disp_size_ = disparity_size;
+            src_pitch_ = src_pitch;
+            dst_pitch_ = dst_pitch;
+            param_ = param;
+
+            src_type_ = src_depth == 8 ? SGM_8U : src_depth == 16 ? SGM_16U : SGM_32U;
+            dst_type_ = dst_depth == 8 ? SGM_8U : SGM_16U;
+
+            is_src_devptr_ = (inout_type & 0x01) > 0;
+            is_dst_devptr_ = (inout_type & 0x02) > 0;
+
+            if (!is_src_devptr_)
+            {
+                d_srcL_.create(height, width, src_type_, src_pitch);
+                d_srcR_.create(height, width, src_type_, src_pitch);
+            }
+
+            const ImageType census_type = param.census_type == CensusType::CENSUS_9x7 ? SGM_64U : SGM_32U;
+            d_censusL_.create(height, width, census_type);
+            d_censusR_.create(height, width, census_type);
+            d_censusL_.fill_zero();
+            d_censusR_.fill_zero();
+
+            d_tmpL_.create(height, width, SGM_16U, dst_pitch);
+            d_tmpR_.create(height, width, SGM_16U, dst_pitch);
+
+            if (!(is_dst_devptr_ && dst_type_ == SGM_16U))
+            {
+                d_dispL_.create(height, width, SGM_16U, dst_pitch);
+            }
+            d_dispR_.create(height, width, SGM_16U, dst_pitch);
+
+            d_minDispsPerPixel_.create(height, width, SGM_16U);
+            d_maxDispsPerPixel_.create(height, width, SGM_16U);
+        }
+
+        void release_memory()
+        {
+            d_srcL_.release();
+            d_srcR_.release();
+            d_censusL_.release();
+            d_censusR_.release();
+            d_cost_.release();
+            d_tmpL_.release();
+            d_tmpR_.release();
+            d_dispL_.release();
+            d_dispR_.release();
+            d_minDispsPerPixel_.release();
+            d_maxDispsPerPixel_.release();
         }
 
         int get_invalid_disparity() const
@@ -188,6 +278,8 @@ namespace sgm
         DeviceImage d_tmpR_;
         DeviceImage d_dispL_;
         DeviceImage d_dispR_;
+        DeviceImage d_minDispsPerPixel_;
+        DeviceImage d_maxDispsPerPixel_;
     };
 
     StereoSGM::Parameters::Parameters(int P1, int P2, float uniqueness, bool subpixel, PathType path_type, int min_disp, int LR_max_diff, CensusType census_type) :
@@ -222,9 +314,30 @@ namespace sgm
         impl_->execute(srcL, srcR, dst);
     }
 
+    void StereoSGM::execute(const void *srcL, const void *srcR, void *dst, const uint16_t *min_disp_per_pixel, const uint16_t *max_disp_per_pixel)
+    {
+        impl_->execute(srcL, srcR, dst, min_disp_per_pixel, max_disp_per_pixel);
+    }
+
     int StereoSGM::get_invalid_disparity() const
     {
         return impl_->get_invalid_disparity();
+    }
+
+    void StereoSGM::reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, ExecuteInOut inout_type, const Parameters &param)
+    {
+        impl_->reconfigure(width, height, disparity_size, input_depth_bits, output_depth_bits, width, width, inout_type, param);
+    }
+
+    void StereoSGM::reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, int src_pitch, int dst_pitch, ExecuteInOut inout_type,
+                                const Parameters &param)
+    {
+        impl_->reconfigure(width, height, disparity_size, input_depth_bits, output_depth_bits, src_pitch, dst_pitch, inout_type, param);
+    }
+
+    void StereoSGM::release_memory()
+    {
+        impl_->release_memory();
     }
 
 } // namespace sgm

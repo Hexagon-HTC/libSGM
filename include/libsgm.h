@@ -29,6 +29,8 @@ limitations under the License.
 
 #include "libsgm_config.h"
 
+#include <cstdint>
+
 #if defined(LIBSGM_SHARED)
 #if defined(WIN32) || defined(_WIN32)
 #if defined sgm_EXPORTS
@@ -157,12 +159,56 @@ namespace sgm
         LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst);
 
         /**
+         * Execute stereo semi global matching with per-pixel disparity range constraints.
+         * Cost aggregation runs over the full global disparity range (preserving P1/P2 penalty propagation),
+         * but the winner-takes-all (WTA) disparity selection is restricted to each pixel's valid range.
+         * @param left_pixels            A pointer to the input left image.
+         * @param right_pixels           A pointer to the input right image.
+         * @param dst                    Output pointer for the disparity map.
+         * @param min_disparity_per_pixel Per-pixel minimum disparity index (0-based, in libSGM index space). Array of width*height uint16_t values in row-major order.
+         * @param max_disparity_per_pixel Per-pixel maximum disparity index (0-based, inclusive). Array of width*height uint16_t values in row-major order.
+         * @attention
+         * Pixels where min > max are treated as invalid and will receive the invalid disparity value.
+         * Both arrays must be in host memory and have width*height elements.
+         */
+        LIBSGM_API void execute(const void *left_pixels, const void *right_pixels, void *dst,
+                                const uint16_t *min_disparity_per_pixel, const uint16_t *max_disparity_per_pixel);
+
+        /**
          * Generate invalid disparity value from Parameter::min_disp and Parameter::subpixel
          * @attention
          * Cast properly if you receive disparity value as `unsigned` type.
          * See sample/movie for an example of this.
          */
         LIBSGM_API int get_invalid_disparity() const;
+
+        /**
+         * Reconfigure the StereoSGM instance for new image dimensions, disparity size, or parameters.
+         * GPU memory buffers are reused when the new size fits within the previously allocated capacity (grow-only).
+         * @param width Processed image's width.
+         * @param height Processed image's height.
+         * @param disparity_size It must be 64, 128 or 256.
+         * @param input_depth_bits Processed image's bits per pixel. It must be 8, 16 or 32.
+         * @param output_depth_bits Disparity image's bits per pixel. It must be 8 or 16.
+         * @param inout_type Specify input/output pointer type.
+         * @param param Algorithm parameters.
+         */
+        LIBSGM_API void reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, ExecuteInOut inout_type,
+                                    const Parameters &param = Parameters());
+
+        /**
+         * Reconfigure with explicit source and destination pitch.
+         * @param src_pitch Source image's pitch (pixels).
+         * @param dst_pitch Destination image's pitch (pixels).
+         */
+        LIBSGM_API void reconfigure(int width, int height, int disparity_size, int input_depth_bits, int output_depth_bits, int src_pitch, int dst_pitch,
+                                    ExecuteInOut inout_type, const Parameters &param = Parameters());
+
+        /**
+         * Release all GPU memory held by this instance.
+         * The object remains valid — call reconfigure() before the next execute().
+         */
+        LIBSGM_API void release_memory();
 
     private:
         StereoSGM(const StereoSGM &);

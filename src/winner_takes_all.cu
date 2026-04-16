@@ -109,6 +109,7 @@ namespace sgm
 #pragma unroll
                 for (unsigned int x1 = 0; x1 < UNROLL_DEPTH; ++x1)
                 {
+                    // Loading phase is triggered every ACCUMULATION_INTERVAL.
                     if (x1 % ACCUMULATION_INTERVAL == 0)
                     {
                         const unsigned int k = lane_id * ACCUMULATION_PER_THREAD;
@@ -148,7 +149,7 @@ namespace sgm
                         const unsigned int k0 = lane_id * REDUCTION_PER_THREAD;
                         uint32_t local_cost_sum[REDUCTION_PER_THREAD];
                         load_uint16_vector<REDUCTION_PER_THREAD>(local_cost_sum, &smem_cost_sum[warp_id][smem_x][k0]);
-                        // Pack sum of costs and dispairty
+                        // Pack sum of costs and disparity
                         uint32_t local_packed_cost[REDUCTION_PER_THREAD];
                         for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
                         {
@@ -214,6 +215,155 @@ namespace sgm
             }
         }
 
+        // Block-cooperative per-pixel range kernel: 1 warp (32 threads) per pixel.
+        // All BLOCK_SIZE threads cooperatively load cost data for WARPS_PER_BLOCK pixels
+        // using wide 128-bit vectorized reads into shared memory, then each warp processes
+        // its pixel's costs from shared memory. Subpixel reads neighbors directly from smem.
+        template<unsigned int MAX_DISPARITY, unsigned int NUM_PATHS>
+        __global__ void winner_takes_all_per_pixel_range_kernel(output_type *left_dest, const cost_type *src, const output_type *min_disps, const output_type *max_disps, int width,
+                                                               int height, int dst_pitch, int min_disp_pitch, float uniqueness, bool subpixel)
+        {
+            static const unsigned int REDUCTION_PER_THREAD = MAX_DISPARITY / WARP_SIZE;
+            static const unsigned int ACCUMULATION_PER_THREAD = 16u;
+            static const unsigned int LOAD_THREADS = (WARPS_PER_BLOCK * MAX_DISPARITY) / ACCUMULATION_PER_THREAD;
+
+            const unsigned int tid = threadIdx.x;
+            const unsigned int warp_id = tid / WARP_SIZE;
+            const unsigned int lane_id = tid % WARP_SIZE;
+
+            const size_t cost_step = static_cast<size_t>(MAX_DISPARITY) * width * height;
+            const int total_pixels = width * height;
+
+            // Shared memory for accumulated cost sums of all pixels in the block
+            __shared__ uint16_t smem_cost_sum[WARPS_PER_BLOCK][MAX_DISPARITY];
+
+            // === Block-cooperative loading phase ===
+            // LOAD_THREADS threads load ACCUMULATION_PER_THREAD (16) bytes each using
+            // 128-bit vectorized reads, accumulate across NUM_PATHS path planes, and
+            // store uint16 sums to shared memory. All threads must reach __syncthreads().
+            {
+                const size_t block_base = static_cast<size_t>(blockIdx.x) * WARPS_PER_BLOCK * MAX_DISPARITY;
+
+                if (tid < LOAD_THREADS)
+                {
+                    const unsigned int flat = tid * ACCUMULATION_PER_THREAD;
+                    const unsigned int pix_in_block = flat / MAX_DISPARITY;
+                    const int linear_pixel = static_cast<int>(blockIdx.x * WARPS_PER_BLOCK + pix_in_block);
+
+                    if (linear_pixel < total_pixels)
+                    {
+                        const unsigned int disp_offset = flat % MAX_DISPARITY;
+                        uint32_t sum[ACCUMULATION_PER_THREAD];
+#pragma unroll
+                        for (unsigned int i = 0; i < ACCUMULATION_PER_THREAD; ++i)
+                        {
+                            sum[i] = 0;
+                        }
+                        for (unsigned int p = 0; p < NUM_PATHS; ++p)
+                        {
+                            uint32_t buf[ACCUMULATION_PER_THREAD];
+                            load_uint8_vector<ACCUMULATION_PER_THREAD>(buf, &src[p * cost_step + block_base + flat]);
+#pragma unroll
+                            for (unsigned int i = 0; i < ACCUMULATION_PER_THREAD; ++i)
+                            {
+                                sum[i] += buf[i];
+                            }
+                        }
+                        store_uint16_vector<ACCUMULATION_PER_THREAD>(&smem_cost_sum[pix_in_block][disp_offset], sum);
+                    }
+                }
+            }
+            __syncthreads();
+
+            // === Per-warp pixel processing ===
+            const unsigned int pixel_idx = blockIdx.x * WARPS_PER_BLOCK + warp_id;
+            const int y = pixel_idx / width;
+            const int x = pixel_idx % width;
+
+            if (y >= height)
+            {
+                return;
+            }
+
+            const output_type min_d = min_disps[y * min_disp_pitch + x];
+            const output_type max_d = max_disps[y * min_disp_pitch + x];
+
+            // Invalid per-pixel range: mark as invalid disparity.
+            if (min_d > max_d || max_d >= MAX_DISPARITY)
+            {
+                if (lane_id == 0)
+                {
+                    left_dest[y * dst_pitch + x] = INVALID_DISP;
+                }
+                return;
+            }
+
+            // Read accumulated costs from shared memory
+            const unsigned int k0 = lane_id * REDUCTION_PER_THREAD;
+            uint32_t local_cost_sum[REDUCTION_PER_THREAD];
+            load_uint16_vector<REDUCTION_PER_THREAD>(local_cost_sum, &smem_cost_sum[warp_id][k0]);
+
+            // Pack cost+index, masking out-of-range disparities to maximum cost
+            uint32_t local_packed[REDUCTION_PER_THREAD];
+#pragma unroll
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
+            {
+                const unsigned int d = k0 + i;
+                const uint32_t cost = (d < min_d || d > max_d) ? 0xFFFFu : local_cost_sum[i];
+                local_packed[i] = pack_cost_index(cost, d);
+            }
+
+            // Warp-level reduction: find best disparity
+            uint32_t best = 0xFFFFFFFFu;
+#pragma unroll
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
+            {
+                best = min(best, local_packed[i]);
+            }
+            best = subgroup_min<WARP_SIZE>(best, 0xFFFFFFFFu);
+
+            const uint32_t bestCost = unpack_cost(best);
+            const int bestDisp = unpack_index(best);
+
+            // Uniqueness check (warp-cooperative)
+            bool uniq = true;
+#pragma unroll
+            for (unsigned int i = 0; i < REDUCTION_PER_THREAD; ++i)
+            {
+                const uint32_t val = local_packed[i];
+                const bool cost_ok = unpack_cost(val) * uniqueness >= bestCost;
+                const bool neighbor = abs(unpack_index(val) - bestDisp) <= 1;
+                uniq &= cost_ok || neighbor;
+            }
+            uniq = subgroup_and<WARP_SIZE>(uniq, 0xFFFFFFFFu);
+
+            // Subpixel: read neighbor costs directly from shared memory (bestDisp is warp-uniform).
+            int result_disp = bestDisp;
+            if (subpixel && uniq && bestDisp > static_cast<int>(min_d) && bestDisp < static_cast<int>(max_d)
+            {
+                const int cost_left = smem_cost_sum[warp_id][bestDisp - 1];
+                const int cost_right = smem_cost_sum[warp_id][bestDisp + 1];
+
+                int subp = bestDisp << StereoSGM::SUBPIXEL_SHIFT;
+                const int numer = cost_left - cost_right;
+                const int denom = cost_left - 2 * static_cast<int>(bestCost) + cost_right;
+                if (denom != 0)
+                {
+                    subp += ((numer << StereoSGM::SUBPIXEL_SHIFT) + denom) / (2 * denom);
+                }
+                result_disp = subp;
+            }
+            else if (subpixel && uniq)
+            {
+                result_disp = bestDisp << StereoSGM::SUBPIXEL_SHIFT;
+            }
+
+            if (lane_id == 0)
+            {
+                left_dest[y * dst_pitch + x] = uniq ? static_cast<output_type>(result_disp) : INVALID_DISP;
+            }
+        }
+
     } // namespace
 
     namespace details
@@ -266,6 +416,53 @@ namespace sgm
             else if (disp_size == 256)
             {
                 winner_takes_all_<256>(src, dstL, dstR, uniqueness, subpixel, path_type);
+            }
+        }
+
+        template<int MAX_DISPARITY>
+        void winner_takes_all_with_per_pixel_range_(const DeviceImage &src, DeviceImage &dstL, float uniqueness, bool subpixel, PathType path_type, const DeviceImage &minDisps,
+                                                    const DeviceImage &maxDisps)
+        {
+            const int width = dstL.cols;
+            const int height = dstL.rows;
+            const int dst_pitch = dstL.step;
+            const int range_pitch = minDisps.step;
+
+            // 1 warp per pixel, WARPS_PER_BLOCK warps per block
+            const int total_pixels = width * height;
+            const int gdim = divUp(total_pixels, WARPS_PER_BLOCK);
+            const int bdim = BLOCK_SIZE;
+
+            if (path_type == PathType::SCAN_8PATH)
+            {
+                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 8>
+                    <<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(), maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch,
+                                     uniqueness, subpixel);
+            }
+            else
+            {
+                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 4>
+                    <<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(), maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch,
+                                     uniqueness, subpixel);
+            }
+
+            CUDA_CHECK(cudaGetLastError());
+        }
+
+        void winner_takes_all_with_per_pixel_range(const DeviceImage &src, DeviceImage &dstL, int disp_size, float uniqueness, bool subpixel, PathType path_type,
+                                                   const DeviceImage &min_disp_per_pixel, const DeviceImage &max_disp_per_pixel)
+        {
+            if (disp_size == 64)
+            {
+                winner_takes_all_with_per_pixel_range_<64>(src, dstL, uniqueness, subpixel, path_type, min_disp_per_pixel, max_disp_per_pixel);
+            }
+            else if (disp_size == 128)
+            {
+                winner_takes_all_with_per_pixel_range_<128>(src, dstL, uniqueness, subpixel, path_type, min_disp_per_pixel, max_disp_per_pixel);
+            }
+            else if (disp_size == 256)
+            {
+                winner_takes_all_with_per_pixel_range_<256>(src, dstL, uniqueness, subpixel, path_type, min_disp_per_pixel, max_disp_per_pixel);
             }
         }
 
