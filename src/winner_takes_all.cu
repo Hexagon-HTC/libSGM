@@ -221,7 +221,7 @@ namespace sgm
         // its pixel's costs from shared memory. Subpixel reads neighbors directly from smem.
         template<unsigned int MAX_DISPARITY, unsigned int NUM_PATHS>
         __global__ void winner_takes_all_per_pixel_range_kernel(output_type *left_dest, const cost_type *src, const output_type *min_disps, const output_type *max_disps, int width,
-                                                               int height, int dst_pitch, int min_disp_pitch, float uniqueness, bool subpixel)
+                                                                int height, int dst_pitch, int min_disp_pitch, float uniqueness, bool subpixel)
         {
             static const unsigned int REDUCTION_PER_THREAD = MAX_DISPARITY / WARP_SIZE;
             static const unsigned int ACCUMULATION_PER_THREAD = 16u;
@@ -339,7 +339,7 @@ namespace sgm
 
             // Subpixel: read neighbor costs directly from shared memory (bestDisp is warp-uniform).
             int result_disp = bestDisp;
-            if (subpixel && uniq && bestDisp > static_cast<int>(min_d) && bestDisp < static_cast<int>(max_d)
+            if (subpixel && uniq && bestDisp > static_cast<int>(min_d) && bestDisp < static_cast<int>(max_d))
             {
                 const int cost_left = smem_cost_sum[warp_id][bestDisp - 1];
                 const int cost_right = smem_cost_sum[warp_id][bestDisp + 1];
@@ -363,7 +363,6 @@ namespace sgm
                 left_dest[y * dst_pitch + x] = uniq ? static_cast<output_type>(result_disp) : INVALID_DISP;
             }
         }
-
     } // namespace
 
     namespace details
@@ -435,15 +434,13 @@ namespace sgm
 
             if (path_type == PathType::SCAN_8PATH)
             {
-                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 8>
-                    <<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(), maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch,
-                                     uniqueness, subpixel);
+                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 8><<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(),
+                                                                                          maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch, uniqueness, subpixel);
             }
             else
             {
-                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 4>
-                    <<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(), maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch,
-                                     uniqueness, subpixel);
+                winner_takes_all_per_pixel_range_kernel<MAX_DISPARITY, 4><<<gdim, bdim>>>(dstL.ptr<output_type>(), src.ptr<cost_type>(), minDisps.ptr<output_type>(),
+                                                                                          maxDisps.ptr<output_type>(), width, height, dst_pitch, range_pitch, uniqueness, subpixel);
             }
 
             CUDA_CHECK(cudaGetLastError());
