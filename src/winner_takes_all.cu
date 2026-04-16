@@ -339,7 +339,7 @@ namespace sgm
 
             // Subpixel: read neighbor costs directly from shared memory (bestDisp is warp-uniform).
             int result_disp = bestDisp;
-            if (subpixel && uniq && bestDisp > 0 && bestDisp < static_cast<int>(MAX_DISPARITY) - 1)
+            if (subpixel && uniq && bestDisp > static_cast<int>(min_d) && bestDisp < static_cast<int>(max_d)
             {
                 const int cost_left = smem_cost_sum[warp_id][bestDisp - 1];
                 const int cost_right = smem_cost_sum[warp_id][bestDisp + 1];
