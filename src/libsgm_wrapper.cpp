@@ -19,57 +19,6 @@ limitations under the License.
 namespace sgm
 {
 
-    LibSGMWrapper::LibSGMWrapper(int numDisparity, int P1, int P2, float uniquenessRatio, bool subpixel, PathType pathType, int minDisparity, int lrMaxDiff,
-                                 CensusType censusType) :
-        sgm_(nullptr),
-        numDisparity_(numDisparity),
-        param_(P1, P2, uniquenessRatio, subpixel, pathType, minDisparity, lrMaxDiff, censusType),
-        prev_(nullptr)
-    {
-    }
-    LibSGMWrapper::~LibSGMWrapper() = default;
-
-    int LibSGMWrapper::getNumDisparities() const
-    {
-        return numDisparity_;
-    }
-    float LibSGMWrapper::getUniquenessRatio() const
-    {
-        return param_.uniqueness;
-    }
-    int LibSGMWrapper::getP1() const
-    {
-        return param_.P1;
-    }
-    int LibSGMWrapper::getP2() const
-    {
-        return param_.P2;
-    }
-    bool LibSGMWrapper::hasSubpixel() const
-    {
-        return param_.subpixel;
-    }
-    PathType LibSGMWrapper::getPathType() const
-    {
-        return param_.path_type;
-    }
-    int LibSGMWrapper::getMinDisparity() const
-    {
-        return param_.min_disp;
-    }
-    int LibSGMWrapper::getLrMaxDiff() const
-    {
-        return param_.LR_max_diff;
-    }
-    CensusType LibSGMWrapper::getCensusType() const
-    {
-        return param_.census_type;
-    }
-    int LibSGMWrapper::getInvalidDisparity() const
-    {
-        return (param_.min_disp - 1) * (param_.subpixel ? StereoSGM::SUBPIXEL_SCALE : 1);
-    }
-
     struct LibSGMWrapper::Creator
     {
         int width;
@@ -126,6 +75,57 @@ namespace sgm
 
 #endif // BUILD_OPRENCV_WRAPPER
     };
+
+    LibSGMWrapper::LibSGMWrapper(int numDisparity, int P1, int P2, float uniquenessRatio, bool subpixel, PathType pathType, int minDisparity, int lrMaxDiff,
+                                 CensusType censusType) :
+        sgm_(nullptr),
+        numDisparity_(numDisparity),
+        param_(P1, P2, uniquenessRatio, subpixel, pathType, minDisparity, lrMaxDiff, censusType),
+        prev_(nullptr)
+    {
+    }
+    LibSGMWrapper::~LibSGMWrapper() = default;
+
+    int LibSGMWrapper::getNumDisparities() const
+    {
+        return numDisparity_;
+    }
+    float LibSGMWrapper::getUniquenessRatio() const
+    {
+        return param_.uniqueness;
+    }
+    int LibSGMWrapper::getP1() const
+    {
+        return param_.P1;
+    }
+    int LibSGMWrapper::getP2() const
+    {
+        return param_.P2;
+    }
+    bool LibSGMWrapper::hasSubpixel() const
+    {
+        return param_.subpixel;
+    }
+    PathType LibSGMWrapper::getPathType() const
+    {
+        return param_.path_type;
+    }
+    int LibSGMWrapper::getMinDisparity() const
+    {
+        return param_.min_disp;
+    }
+    int LibSGMWrapper::getLrMaxDiff() const
+    {
+        return param_.LR_max_diff;
+    }
+    CensusType LibSGMWrapper::getCensusType() const
+    {
+        return param_.census_type;
+    }
+    int LibSGMWrapper::getInvalidDisparity() const
+    {
+        return (param_.min_disp - 1) * (param_.subpixel ? StereoSGM::SUBPIXEL_SCALE : 1);
+    }
 
 #ifdef BUILD_OPENCV_WRAPPER
 
